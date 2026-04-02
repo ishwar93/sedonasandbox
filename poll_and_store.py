@@ -34,27 +34,29 @@ def write_to_databricks(df: pl.DataFrame, table: str) -> int:
         print(f"  [{table}] no data to write")
         return 0
 
-    rows         = df.to_dicts()
-    cols         = list(rows[0].keys())
-    col_names    = ', '.join(cols)
-    placeholders = ', '.join(['?' for _ in cols])
-    batch_size   = 500
-    total        = 0
+    rows       = df.to_dicts()
+    cols       = list(rows[0].keys())
+    col_names  = ', '.join(cols)
+    batch_size = 500
+    total      = 0
 
     try:
         with get_connection() as conn:
             with conn.cursor() as cursor:
                 for i in range(0, len(rows), batch_size):
-                    batch = rows[i:i + batch_size]
-                    cursor.executemany(
-                        f"INSERT INTO transit.{table} "
-                        f"({col_names}) VALUES ({placeholders})",
-                        [list(r.values()) for r in batch]
+                    batch       = rows[i:i + batch_size]
+                    placeholders = ', '.join(f"({', '.join(['?' for _ in cols])})" for _ in batch)
+                    values      = [v for r in batch for v in r.values()]
+                    cursor.execute(
+                        f"INSERT INTO transit.{table} ({col_names}) VALUES {placeholders}",
+                        values
                     )
                     total += len(batch)
+                    print(f"  {table}: {total:,}", end='\r')
+        print()
         return total
     except Exception as e:
-        print(f"  [{table}] write error: {e}")
+        print(f"\n  [{table}] write error: {e}")
         return 0
 
 
