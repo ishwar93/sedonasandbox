@@ -1,0 +1,32 @@
+# .github/workflows/gtfs_update.yml
+
+name: GTFS Static Updater
+
+on:
+  schedule:
+    - cron: '0 6 * * *'        # daily at 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30         # stop_connections derivation is slow
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run GTFS updater
+        env:
+          DATABRICKS_HOST:      ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
+          DATABRICKS_TOKEN:     ${{ secrets.DATABRICKS_TOKEN }}
+        run: uv run python ingest_gtfs.py

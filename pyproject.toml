@@ -1,0 +1,15 @@
+[project]
+name = "nyc-transit"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "databricks-sql-connector>=4.2.5",
+    "dotenv>=0.9.9",
+    "gtfs-realtime-bindings>=2.0.0",
+    "nyct-gtfs>=1.3.2",
+    "polars>=1.39.3",
+    "protobuf>=7.34.1",
+    "requests>=2.33.0",
+]

@@ -1,0 +1,17 @@
+# virtual env
+.venv/
+
+# secrets
+.env
+
+# yelp data — too large for git
+data/yelp/
+
+# gtfs zips if downloaded locally
+gtfs/*.zip
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
