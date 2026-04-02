@@ -24,7 +24,7 @@ jobs:
 
       - name: Run poller
         env:
-          DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_SERVER_HOSTNAME }}
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_HTTP_PATH:       ${{ secrets.DATABRICKS_HTTP_PATH }}
           DATABRICKS_TOKEN:           ${{ secrets.DATABRICKS_TOKEN }}
           MTA_BUS_KEY:                ${{ secrets.MTA_BUS_KEY }}
