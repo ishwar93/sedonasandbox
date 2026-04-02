@@ -2,13 +2,14 @@ name: Transit Data Poller
 
 on:
   schedule:
-    - cron: '0 45 * * *' #45 minutes
-    workflow_dispatch:
+    - cron: '0,45 * * * *'
+  workflow_dispatch:
 
 jobs:
   poll:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -21,12 +22,10 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      - name: run poller
+      - name: Run poller
         env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-          MTA_BUS_KEY: ${{ secrets.MTA_BUS_KEY }}
-        run: python poll_and_store.py
-
-      
+          DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_SERVER_HOSTNAME }}
+          DATABRICKS_HTTP_PATH:       ${{ secrets.DATABRICKS_HTTP_PATH }}
+          DATABRICKS_TOKEN:           ${{ secrets.DATABRICKS_TOKEN }}
+          MTA_BUS_KEY:                ${{ secrets.MTA_BUS_KEY }}
+        run: uv run python poll_and_store.py
