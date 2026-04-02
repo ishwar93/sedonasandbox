@@ -159,7 +159,7 @@ def fetch_buses():
                 'distance_from_stop': int(mc.get('DistanceFromStop', 0) or 0),
                 'stops_away': int(mc.get('NumberOfStopsAway', 0) or 0),
                 'passenger_count': int(caps.get('EstimatedPassengerCount', 0)or 0),
-                'passenger_capacity': int(caps.get('EstimatedPassengerCapacity', 0) or 0)
+                'passenger_capacity': int(caps.get('EstimatedPassengerCapacity', 0) or 0),
                 'ingested_at': now.isoformat()
             })
         except Exception as e:
