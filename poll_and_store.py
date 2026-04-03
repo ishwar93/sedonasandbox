@@ -1,3 +1,4 @@
+
 import os
 import requests
 import polars as pl
@@ -8,26 +9,63 @@ from nyct_gtfs import NYCTFeed
 
 load_dotenv()
 
-DATABRICKS_HOST = os.environ['DATABRICKS_HOST']
-DATABRICKS_HTTP_PATH       = os.environ['DATABRICKS_HTTP_PATH']
-DATABRICKS_TOKEN           = os.environ['DATABRICKS_TOKEN']
-MTA_BUS_KEY                = os.environ['MTA_BUS_KEY']
+DATABRICKS_HOST      = os.environ['DATABRICKS_HOST']
+DATABRICKS_HTTP_PATH = os.environ['DATABRICKS_HTTP_PATH']
+DATABRICKS_TOKEN     = os.environ['DATABRICKS_TOKEN']
+MTA_BUS_KEY          = os.environ['MTA_BUS_KEY']
 
+# One representative per feed group — no API key required since MTA opened access.
 FEED_REPRESENTATIVES = ["1", "A", "B", "G", "J", "N", "L", "SIR"]
-
-CITIBIKE_INTERVAL = 2700
-BUS_INTERVAL      = 2700
-SUBWAY_INTERVAL   = 2700
-TRAFFIC_INTERVAL  = 2700
 
 
 def get_connection():
     return sql.connect(
-        server_hostname = DATABRICKS_HOST,
-        http_path       = DATABRICKS_HTTP_PATH,
-        access_token    = DATABRICKS_TOKEN
+        server_hostname=DATABRICKS_HOST,
+        http_path=DATABRICKS_HTTP_PATH,
+        access_token=DATABRICKS_TOKEN
     )
 
+
+def get_last_seen(source: str) -> str | None:
+    """Return the last stored snapshot token for a source."""
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(f"""
+                    SELECT etag FROM transit.gtfs_feed_versions
+                    WHERE feed_id = 'poll_{source}'
+                """)
+                row = cursor.fetchone()
+                return row[0] if row else None
+    except Exception:
+        return None
+
+
+def set_last_seen(source: str, value: str):
+    """Upsert the snapshot token for a source."""
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(f"""
+                    DELETE FROM transit.gtfs_feed_versions
+                    WHERE feed_id = 'poll_{source}'
+                """)
+                cursor.execute("""
+                    INSERT INTO transit.gtfs_feed_versions
+                    (feed_id, feed_type, source_url, etag, downloaded_at)
+                    VALUES (?, ?, ?, ?, ?)
+                """, [
+                    f'poll_{source}', 'poll', source, value,
+                    datetime.utcnow().isoformat()
+                ])
+    except Exception as e:
+        print(f"  [set_last_seen:{source}] error: {e}")
+
+
+# ── Generic append writer ──────────────────────────────────────────────────────
+# Used by: citibike_status, bus_positions, traffic_speeds
+# These are time-series tables — every poll adds new rows.
+# Historical data feeds the agg_* aggregation tables.
 
 def write_to_databricks(df: pl.DataFrame, table: str) -> int:
     if df.is_empty():
@@ -44,9 +82,9 @@ def write_to_databricks(df: pl.DataFrame, table: str) -> int:
         with get_connection() as conn:
             with conn.cursor() as cursor:
                 for i in range(0, len(rows), batch_size):
-                    batch       = rows[i:i + batch_size]
+                    batch        = rows[i:i + batch_size]
                     placeholders = ', '.join(f"({', '.join(['?' for _ in cols])})" for _ in batch)
-                    values      = [v for r in batch for v in r.values()]
+                    values       = [v for r in batch for v in r.values()]
                     cursor.execute(
                         f"INSERT INTO transit.{table} ({col_names}) VALUES {placeholders}",
                         values
@@ -60,6 +98,45 @@ def write_to_databricks(df: pl.DataFrame, table: str) -> int:
         return 0
 
 
+# ── Overwrite writer ───────────────────────────────────────────────────────────
+# Used by: citibike_stations, subway_positions
+# These are current-state tables — only the latest snapshot matters.
+# Historic rows have no analytical value.
+
+def overwrite_table(df: pl.DataFrame, table: str) -> int:
+    if df.is_empty():
+        print(f"  [{table}] no data to write")
+        return 0
+
+    rows       = df.to_dicts()
+    cols       = list(rows[0].keys())
+    col_names  = ', '.join(cols)
+    batch_size = 500
+    total      = 0
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(f"DELETE FROM transit.{table} WHERE 1=1")
+                for i in range(0, len(rows), batch_size):
+                    batch        = rows[i:i + batch_size]
+                    placeholders = ', '.join(f"({', '.join(['?' for _ in cols])})" for _ in batch)
+                    values       = [v for r in batch for v in r.values()]
+                    cursor.execute(
+                        f"INSERT INTO transit.{table} ({col_names}) VALUES {placeholders}",
+                        values
+                    )
+                    total += len(batch)
+                    print(f"  {table}: {total:,}", end='\r')
+        print()
+        return total
+    except Exception as e:
+        print(f"\n  [{table}] write error: {e}")
+        return 0
+
+
+# ── Fetchers ───────────────────────────────────────────────────────────────────
+
 def fetch_citibike() -> tuple[pl.DataFrame, pl.DataFrame]:
     now = datetime.utcnow()
 
@@ -68,7 +145,6 @@ def fetch_citibike() -> tuple[pl.DataFrame, pl.DataFrame]:
             "https://gbfs.lyft.com/gbfs/1.1/bkn/en/station_status.json",
             timeout=5
         ).json()
-
         info_r = requests.get(
             "https://gbfs.lyft.com/gbfs/1.1/bkn/en/station_information.json",
             timeout=5
@@ -77,6 +153,14 @@ def fetch_citibike() -> tuple[pl.DataFrame, pl.DataFrame]:
         print(f"  [citibike] fetch error: {e}")
         return pl.DataFrame(), pl.DataFrame()
 
+    # Skip status write if feed hasn't updated (GBFS ttl=60s)
+    status_ts = str(status_r.get('last_updated', ''))
+    if status_ts and status_ts == get_last_seen('citibike_status'):
+        print(f"  [citibike] unchanged (last_updated={status_ts}) — skipping")
+        return pl.DataFrame(), pl.DataFrame()
+    set_last_seen('citibike_status', status_ts)
+
+    # status rows — time series, appended
     status_rows = [{
         'station_id':       str(s['station_id']),
         'bikes_available':  int(s.get('num_bikes_available', 0)),
@@ -87,13 +171,14 @@ def fetch_citibike() -> tuple[pl.DataFrame, pl.DataFrame]:
         'ingested_at':      now.isoformat()
     } for s in status_r['data']['stations']]
 
+    # station rows — current state only, overwritten
+    # No ingested_at — this is config, not a time series
     station_rows = [{
         'station_id':   str(s.get('station_id', '')),
         'station_name': str(s.get('name', '')),
         'lat':          float(s.get('lat', 0)),
         'lon':          float(s.get('lon', 0)),
         'capacity':     int(s.get('capacity', 0)),
-        'ingested_at':  now.isoformat()
     } for s in info_r['data']['stations']]
 
     return pl.DataFrame(status_rows), pl.DataFrame(station_rows)
@@ -113,11 +198,15 @@ def fetch_buses() -> pl.DataFrame:
             timeout=10
         ).json()
 
-        delivery = (
-            resp['Siri']['ServiceDelivery']['VehicleMonitoringDelivery']
-        )
+        delivery = resp['Siri']['ServiceDelivery']['VehicleMonitoringDelivery']
         if isinstance(delivery, list):
             delivery = delivery[0]
+
+        valid_until = delivery.get('ValidUntil', '')
+        if valid_until and valid_until == get_last_seen('bus_positions'):
+            print(f"  [bus] unchanged (ValidUntil={valid_until}) — skipping")
+            return pl.DataFrame()
+        set_last_seen('bus_positions', valid_until)
 
         activities = delivery.get('VehicleActivity', [])
         if isinstance(activities, dict):
@@ -131,7 +220,7 @@ def fetch_buses() -> pl.DataFrame:
     for activity in activities:
         try:
             j   = activity.get('MonitoredVehicleJourney', {})
-            loc = j.get('VehicleLocation', {})  # fixed typo VehicaleLocation
+            loc = j.get('VehicleLocation', {})
             if not loc:
                 continue
 
@@ -175,13 +264,19 @@ def fetch_subway() -> pl.DataFrame:
 
     for line in FEED_REPRESENTATIVES:
         try:
-            feed   = NYCTFeed(line)
-            trains = feed.trips  # property not method — no ()
+            feed = NYCTFeed(line)
 
-            for train in trains:
-                if not train.location:
-                    continue
+            feed_key       = f'subway_{line}'
+            last_generated = feed.last_generated.isoformat() if feed.last_generated else ''
+            if last_generated and last_generated == get_last_seen(feed_key):
+                print(f"  [subway:{line}] unchanged — skipping")
+                continue
+            set_last_seen(feed_key, last_generated)
 
+            for train in feed.trips:
+                # All trains included — even without a location fix yet.
+                # location_stop='' for unfixed trains; PageRank still counts
+                # them as active trips on their route for frequency weighting.
                 next_arrival = ''
                 if train.stop_time_updates:
                     next_stop    = train.stop_time_updates[0]
@@ -224,6 +319,12 @@ def fetch_traffic() -> pl.DataFrame:
         print(f"  [traffic] fetch error: {e}")
         return pl.DataFrame()
 
+    latest_ts = data[0].get('data_as_of', '') if data else ''
+    if latest_ts and latest_ts == get_last_seen('traffic_speeds'):
+        print(f"  [traffic] unchanged (data_as_of={latest_ts}) — skipping")
+        return pl.DataFrame()
+    set_last_seen('traffic_speeds', latest_ts)
+
     rows = []
     for seg in data:
         try:
@@ -240,23 +341,20 @@ def fetch_traffic() -> pl.DataFrame:
             print(f"  [traffic] segment error: {e}")
             continue
 
-    return pl.DataFrame(rows) if rows else pl.DataFrame()  # fixed indent
+    return pl.DataFrame(rows) if rows else pl.DataFrame()
 
+
+# ── Rolling deletion ───────────────────────────────────────────────────────────
+# Only time-series tables need rolling delete.
+# subway_positions is overwritten each poll so never accumulates.
+# citibike_stations is overwritten each poll so never accumulates.
 
 def rolling_delete(days_to_keep: int = 30):
     if datetime.utcnow().hour != 0:
         return
 
-    cutoff = (
-        datetime.utcnow() - timedelta(days=days_to_keep)
-    ).isoformat()
-
-    tables = [
-        'citibike_status',
-        'bus_positions',
-        'subway_positions',
-        'traffic_speeds'
-    ]
+    cutoff = (datetime.utcnow() - timedelta(days=days_to_keep)).isoformat()
+    tables = ['citibike_status', 'bus_positions', 'traffic_speeds']
 
     print(f"\n  Rolling delete — removing rows before {cutoff}")
 
@@ -275,24 +373,21 @@ def rolling_delete(days_to_keep: int = 30):
 
 def check_row_counts():
     tables = [
-        'citibike_stations',
-        'citibike_status',
-        'bus_positions',
-        'subway_positions',
-        'traffic_speeds'
+        'citibike_stations', 'citibike_status',
+        'bus_positions', 'subway_positions', 'traffic_speeds'
     ]
     try:
         with get_connection() as conn:
             with conn.cursor() as cursor:
                 for table in tables:
-                    cursor.execute(
-                        f"SELECT COUNT(*) FROM transit.{table}"
-                    )
+                    cursor.execute(f"SELECT COUNT(*) FROM transit.{table}")
                     count = cursor.fetchone()[0]
                     print(f"  transit.{table:25s} {count:>10,} rows")
     except Exception as e:
         print(f"  Row count error: {e}")
 
+
+# ── Main ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     start = datetime.utcnow()
@@ -302,21 +397,21 @@ if __name__ == "__main__":
 
     print("\nFetching Citi Bike...")
     status_df, station_df = fetch_citibike()
-    n = write_to_databricks(status_df,  'citibike_status')
+    n = write_to_databricks(status_df, 'citibike_status')       # append — time series
     print(f"  citibike_status:   {n:>5} rows written")
-    n = write_to_databricks(station_df, 'citibike_stations')
+    n = overwrite_table(station_df, 'citibike_stations')        # overwrite — current state
     print(f"  citibike_stations: {n:>5} rows written")
 
     print("\nFetching MTA Bus...")
-    n = write_to_databricks(fetch_buses(), 'bus_positions')
+    n = write_to_databricks(fetch_buses(), 'bus_positions')     # append — time series
     print(f"  bus_positions:     {n:>5} rows written")
 
     print("\nFetching MTA Subway...")
-    n = write_to_databricks(fetch_subway(), 'subway_positions')
+    n = overwrite_table(fetch_subway(), 'subway_positions')     # overwrite — current state
     print(f"  subway_positions:  {n:>5} rows written")
 
     print("\nFetching NYC DOT Traffic...")
-    n = write_to_databricks(fetch_traffic(), 'traffic_speeds')
+    n = write_to_databricks(fetch_traffic(), 'traffic_speeds')  # append — time series
     print(f"  traffic_speeds:    {n:>5} rows written")
 
     rolling_delete(days_to_keep=30)
