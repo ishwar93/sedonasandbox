@@ -2,7 +2,8 @@ name: Transit Data Poller
 
 on:
   schedule:
-    - cron: '0,45 * * * *'
+    # Every 30 min, 06:00–22:30 UTC (peak service hours)
+    - cron: '0,30 6-22 * * *'
   workflow_dispatch:
 
 jobs:
@@ -24,8 +25,8 @@ jobs:
 
       - name: Run poller
         env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_HTTP_PATH:       ${{ secrets.DATABRICKS_HTTP_PATH }}
-          DATABRICKS_TOKEN:           ${{ secrets.DATABRICKS_TOKEN }}
-          MTA_BUS_KEY:                ${{ secrets.MTA_BUS_KEY }}
+          DATABRICKS_HOST:      ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
+          DATABRICKS_TOKEN:     ${{ secrets.DATABRICKS_TOKEN }}
+          MTA_BUS_KEY:          ${{ secrets.MTA_BUS_KEY }}
         run: uv run python poll_and_store.py

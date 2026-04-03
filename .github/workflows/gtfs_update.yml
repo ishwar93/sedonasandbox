@@ -1,16 +1,14 @@
-# .github/workflows/gtfs_update.yml
-
 name: GTFS Static Updater
 
 on:
   schedule:
-    - cron: '0 6 * * *'        # daily at 06:00 UTC
+    - cron: '0 6 * * 1'        # weekly, Monday 06:00 UTC
   workflow_dispatch:
 
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 30         # stop_connections derivation is slow
+    timeout-minutes: 150        # last run took 114 min; give headroom for all feeds
 
     steps:
       - uses: actions/checkout@v4

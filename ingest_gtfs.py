@@ -9,13 +9,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABRICKS_HOST = os.environ['DATABRICKS_HOST']  
-DATABRICKS_HTTP_PATH       = os.environ['DATABRICKS_HTTP_PATH']
-DATABRICKS_TOKEN           = os.environ['DATABRICKS_TOKEN']
+DATABRICKS_HOST      = os.environ['DATABRICKS_HOST']
+DATABRICKS_HTTP_PATH = os.environ['DATABRICKS_HTTP_PATH']
+DATABRICKS_TOKEN     = os.environ['DATABRICKS_TOKEN']
 
 FEEDS = {
     'subway_supplemented': 'https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip',
-    'subway_regular':      'https://rrgtfsfeeds.s3.amazonaws.com/gtfs_subway.zip',
+    # 'subway_regular' removed
     'bus_bronx':           'https://rrgtfsfeeds.s3.amazonaws.com/gtfs_bx.zip',
     'bus_brooklyn':        'https://rrgtfsfeeds.s3.amazonaws.com/gtfs_b.zip',
     'bus_manhattan':       'https://rrgtfsfeeds.s3.amazonaws.com/gtfs_m.zip',
@@ -27,9 +27,9 @@ FEEDS = {
 
 def get_connection():
     return sql.connect(
-        server_hostname = DATABRICKS_HOST,
-        http_path       = DATABRICKS_HTTP_PATH,
-        access_token    = DATABRICKS_TOKEN
+        server_hostname=DATABRICKS_HOST,
+        http_path=DATABRICKS_HTTP_PATH,
+        access_token=DATABRICKS_TOKEN
     )
 
 
@@ -50,8 +50,7 @@ def write_to_databricks(df: pl.DataFrame, table: str) -> int:
     rows         = df.to_dicts()
     cols         = list(rows[0].keys())
     col_names    = ', '.join(cols)
-    placeholders = ', '.join(['?' for _ in cols])
-    batch_size   = 500
+    batch_size   = 2000
     total        = 0
 
     try:
@@ -59,11 +58,9 @@ def write_to_databricks(df: pl.DataFrame, table: str) -> int:
             with conn.cursor() as cursor:
                 for i in range(0, len(rows), batch_size):
                     batch = rows[i:i + batch_size]
-                    cursor.executemany(
-                        f"INSERT INTO transit.{table} "
-                        f"({col_names}) VALUES ({placeholders})",
-                        [list(r.values()) for r in batch]
-                    )
+                    placeholders = ', '.join(f"({', '.join(['?' for _ in cols])})" for _ in batch)
+                    values = [v for r in batch for v in r.values()]
+                    cursor.execute(f"INSERT INTO transit.{table} ({col_names}) VALUES {placeholders}", values)
                     total += len(batch)
                     print(f"  {table}: {total:,}", end='\r')
     except Exception as e:
@@ -94,7 +91,7 @@ def delete_feed(feed_id: str):
 
 def get_remote_etag(url: str) -> str | None:
     try:
-        resp = requests.head(url, timeout=10)  # fixed: was requests.get
+        resp = requests.head(url, timeout=10)
         return resp.headers.get('ETag', '').strip('"')
     except Exception as e:
         print(f"  ETag check failed: {e}")
@@ -123,7 +120,6 @@ def update_feed_version(feed_id: str, url: str, etag: str):
                     DELETE FROM transit.gtfs_feed_versions
                     WHERE feed_id = '{feed_id}'
                 """)
-                # fixed: had duplicate column list and wrong syntax
                 cursor.execute("""
                     INSERT INTO transit.gtfs_feed_versions
                     (feed_id, feed_type, source_url, etag, downloaded_at)
@@ -139,7 +135,7 @@ def update_feed_version(feed_id: str, url: str, etag: str):
         print(f"  Version update failed: {e}")
 
 
-def ingest_stops(zf: zipfile.ZipFile, feed_id: str) -> int:  # fixed: was zipfile.Zipfile
+def ingest_stops(zf: zipfile.ZipFile, feed_id: str) -> int:
     if 'stops.txt' not in zf.namelist():
         print(f"  No stops.txt in {feed_id}")
         return 0
@@ -158,27 +154,28 @@ def ingest_stops(zf: zipfile.ZipFile, feed_id: str) -> int:  # fixed: was zipfil
     available = {k: v for k, v in rename_map.items() if k in df.columns}
     df = df.select(list(available.keys())).rename(available)
 
-    # fill optional columns that may be absent
     if 'location_type' not in df.columns:
         df = df.with_columns(pl.lit('0').alias('location_type'))
     if 'parent_station' not in df.columns:
         df = df.with_columns(pl.lit('').alias('parent_station'))
 
-    # cast after infer_schema_length=0 — everything came in as string
+    # FIX: strip whitespace from lat/lon before casting to Float64.
+    # Bus feeds (bronx, brooklyn, etc.) have leading spaces e.g. "  40.895247"
+    # which causes strict_cast to fail for all rows.
     df = df.with_columns([
         pl.lit(feed_id).alias('feed_id'),
-        pl.col('lat').cast(pl.Float64),
-        pl.col('lon').cast(pl.Float64),
-        pl.col('location_type').cast(pl.Int32),
+        pl.col('lat').str.strip_chars().cast(pl.Float64),
+        pl.col('lon').str.strip_chars().cast(pl.Float64),
+        pl.col('location_type').str.strip_chars().cast(pl.Int32),
         pl.col('stop_id').cast(pl.Utf8),
         pl.col('stop_name').cast(pl.Utf8),
         pl.col('parent_station').cast(pl.Utf8),
-    ])  # fixed: was missing commas between cast lines, had ingested_at removed
+    ])
 
     return write_to_databricks(df, 'gtfs_stops')
 
 
-def ingest_routes(zf: zipfile.ZipFile, feed_id: str) -> int:  # fixed: was zipfile.Zipfile
+def ingest_routes(zf: zipfile.ZipFile, feed_id: str) -> int:
     if 'routes.txt' not in zf.namelist():
         print(f"  No routes.txt in {feed_id}")
         return 0
@@ -200,15 +197,13 @@ def ingest_routes(zf: zipfile.ZipFile, feed_id: str) -> int:  # fixed: was zipfi
 
     df = df.with_columns([
         pl.lit(feed_id).alias('feed_id'),
-        pl.col('route_type').cast(pl.Int32),
-        # fixed: had pl.col('lat') which doesn't exist on routes
-        # fixed: route_short_name should stay as string not Int32
+        pl.col('route_type').str.strip_chars().cast(pl.Int32),
     ])
 
     return write_to_databricks(df, 'gtfs_routes')
 
 
-def ingest_trips(zf: zipfile.ZipFile, feed_id: str) -> int:  # fixed: was feed_ids: str (typo)
+def ingest_trips(zf: zipfile.ZipFile, feed_id: str) -> int:
     if 'trips.txt' not in zf.namelist():
         return 0
 
@@ -229,7 +224,7 @@ def ingest_trips(zf: zipfile.ZipFile, feed_id: str) -> int:  # fixed: was feed_i
 
     df = df.with_columns([
         pl.lit(feed_id).alias('feed_id'),
-        pl.col('direction_id').cast(pl.Int32),
+        pl.col('direction_id').str.strip_chars().cast(pl.Int32),
     ])
 
     return write_to_databricks(df, 'gtfs_trips')
@@ -242,10 +237,10 @@ def ingest_transfers(zf: zipfile.ZipFile, feed_id: str) -> int:
     df = read_zip_csv(zf, 'transfers.txt')
 
     rename_map = {
-        'from_stop_id':      'from_stop_id',   # fixed: was 'from stop_id' with space
+        'from_stop_id':      'from_stop_id',
         'to_stop_id':        'to_stop_id',
         'transfer_type':     'transfer_type',
-        'min_transfer_time': 'min_transfer_time',  # fixed: was 'min_trasfer_time' (typo)
+        'min_transfer_time': 'min_transfer_time',
     }
 
     available = {k: v for k, v in rename_map.items() if k in df.columns}
@@ -255,7 +250,8 @@ def ingest_transfers(zf: zipfile.ZipFile, feed_id: str) -> int:
         df = df.with_columns(pl.lit(None).cast(pl.Int32).alias('min_transfer_time'))
 
     df = df.with_columns([
-        pl.col('transfer_type').cast(pl.Int32),
+        pl.lit(feed_id).alias('feed_id'),
+        pl.col('transfer_type').str.strip_chars().cast(pl.Int32),
     ])
 
     return write_to_databricks(df, 'gtfs_transfers')
@@ -274,12 +270,13 @@ def ingest_calendar(zf: zipfile.ZipFile, feed_id: str) -> int:
     available = [c for c in cols_needed if c in df.columns]
     df = df.select(available)
 
-    for day in ['monday', 'tuesday', 'wednesday',
-                'thursday', 'friday', 'saturday', 'sunday']:
+    day_cols = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+    cast_exprs = [pl.lit(feed_id).alias('feed_id')]
+    for day in day_cols:
         if day in df.columns:
-            df = df.with_columns(pl.col(day).cast(pl.Int32))
+            cast_exprs.append(pl.col(day).str.strip_chars().cast(pl.Int32))
 
-    # no ingested_at — static table, removed as agreed
+    df = df.with_columns(cast_exprs)
 
     return write_to_databricks(df, 'gtfs_calendar')
 
@@ -288,9 +285,9 @@ def ingest_shapes(zf: zipfile.ZipFile, feed_id: str) -> int:
     if 'shapes.txt' not in zf.namelist():
         return 0
 
-    df = read_zip_csv(zf, 'shapes.txt')  # fixed: was zf.open without encoding handling
+    df = read_zip_csv(zf, 'shapes.txt')
 
-    rename_map = {   # fixed: was a list [] not a dict {}
+    rename_map = {
         'shape_id':          'shape_id',
         'shape_pt_lat':      'shape_pt_lat',
         'shape_pt_lon':      'shape_pt_lon',
@@ -300,10 +297,12 @@ def ingest_shapes(zf: zipfile.ZipFile, feed_id: str) -> int:
     available = {k: v for k, v in rename_map.items() if k in df.columns}
     df = df.select(list(available.keys())).rename(available)
 
+    # FIX: same whitespace stripping applied to shape lat/lon for bus feeds
     df = df.with_columns([
-        pl.col('shape_pt_lat').cast(pl.Float64),
-        pl.col('shape_pt_lon').cast(pl.Float64),
-        pl.col('shape_pt_sequence').cast(pl.Int32),
+        pl.lit(feed_id).alias('feed_id'),
+        pl.col('shape_pt_lat').str.strip_chars().cast(pl.Float64),
+        pl.col('shape_pt_lon').str.strip_chars().cast(pl.Float64),
+        pl.col('shape_pt_sequence').str.strip_chars().cast(pl.Int32),
     ])
 
     return write_to_databricks(df, 'gtfs_shapes')
@@ -338,23 +337,24 @@ def derive_stop_connections(zf: zipfile.ZipFile, feed_id: str) -> int:
 
     st = st.filter(pl.col('to_stop_id').is_not_null())
 
-    def time_to_sec(t: str) -> int:
-        try:
-            h, m, s = str(t).split(':')
-            return int(h) * 3600 + int(m) * 60 + int(s)
-        except Exception:
-            return 0
+    print(f"  Converting times to seconds (native Polars)...")
+
+    def time_col_to_sec(col_name: str, alias: str):
+        parts = pl.col(col_name).str.strip_chars().str.split(':')
+        return (
+            parts.list.get(0).cast(pl.Int32) * 3600 +
+            parts.list.get(1).cast(pl.Int32) * 60 +
+            parts.list.get(2).cast(pl.Int32)
+        ).alias(alias)
 
     st = st.with_columns([
-        pl.col('departure_time').map_elements(
-            time_to_sec, return_dtype=pl.Int32
-        ).alias('dep_sec'),
-        pl.col('next_arrival_time').map_elements(
-            time_to_sec, return_dtype=pl.Int32
-        ).alias('arr_sec'),
+        time_col_to_sec('departure_time',    'dep_sec'),
+        time_col_to_sec('next_arrival_time', 'arr_sec'),
     ]).with_columns([
         (pl.col('arr_sec') - pl.col('dep_sec')).alias('scheduled_travel_time_sec')
     ])
+
+    print(f"  Filtering and deduplicating...")
 
     connections = st.filter(
         pl.col('scheduled_travel_time_sec') > 0
@@ -362,8 +362,9 @@ def derive_stop_connections(zf: zipfile.ZipFile, feed_id: str) -> int:
         pl.col('stop_id').alias('from_stop_id'),
         pl.col('to_stop_id'),
         pl.col('route_id'),
-        pl.col('direction_id').cast(pl.Int32),
+        pl.col('direction_id').str.strip_chars().cast(pl.Int32),
         pl.col('scheduled_travel_time_sec'),
+        pl.lit(feed_id).alias('feed_id')
     ]).unique(
         subset=['from_stop_id', 'to_stop_id', 'route_id', 'direction_id']
     )
@@ -394,30 +395,34 @@ def ingest_feed(feed_id: str, url: str):
         print(f"  Download failed: {e}")
         return
 
-    # fixed: zf was used in ingest functions before being defined
-    # zf is now downloaded here and passed to all functions
-
     delete_feed(feed_id)
 
     n = ingest_stops(zf, feed_id)
+    print(f"  gtfs_stops: {n:,}")
     print(f"  stops:       {n:,} rows")
 
     n = ingest_routes(zf, feed_id)
+    print(f"  gtfs_routes: {n:,}")
     print(f"  routes:      {n:,} rows")
 
     n = ingest_trips(zf, feed_id)
+    print(f"  gtfs_trips: {n:,}")
     print(f"  trips:       {n:,} rows")
 
     n = ingest_transfers(zf, feed_id)
+    print(f"  gtfs_transfers: {n:,}")
     print(f"  transfers:   {n:,} rows")
 
     n = ingest_calendar(zf, feed_id)
+    print(f"  gtfs_calendar: {n:,}")
     print(f"  calendar:    {n:,} rows")
 
     n = ingest_shapes(zf, feed_id)
+    print(f"  gtfs_shapes: {n:,}")
     print(f"  shapes:      {n:,} rows")
 
     n = derive_stop_connections(zf, feed_id)
+    print(f"  gtfs_stop_connections: {n:,}")
     print(f"  connections: {n:,} rows")
 
     if remote_etag:

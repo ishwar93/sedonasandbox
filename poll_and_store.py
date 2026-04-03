@@ -75,7 +75,7 @@ def write_to_databricks(df: pl.DataFrame, table: str) -> int:
     rows       = df.to_dicts()
     cols       = list(rows[0].keys())
     col_names  = ', '.join(cols)
-    batch_size = 500
+    batch_size = 2000
     total      = 0
 
     try:
