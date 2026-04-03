@@ -1,0 +1,34 @@
+
+name: Transit Aggregator
+
+on:
+  schedule:
+    # Runs daily at 23:30 UTC — 30 min after midnight poll collects the day's last data
+    # Sunday run also triggers weekly aggregations
+    # 1st of month run also triggers monthly aggregations
+    - cron: '30 23 * * *'
+  workflow_dispatch:
+
+jobs:
+  aggregate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run aggregator
+        env:
+          DATABRICKS_HOST:      ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
+          DATABRICKS_TOKEN:     ${{ secrets.DATABRICKS_TOKEN }}
+        run: uv run python aggregate.py
