@@ -57,7 +57,7 @@ def aggregate_traffic_hourly(date: str):
             segment_id,
             borough,
             DATE_TRUNC('hour', ingested_at)         AS hour_bucket,
-            'CAST({date} AS DATE)'                                AS calendar_date,
+            CAST({date} AS DATE)                                AS calendar_date,
             YEAR(ingested_at)                       AS data_year,
             MONTH(ingested_at)                      AS month_of_year,
             WEEKOFYEAR(ingested_at)                 AS week_of_year,
@@ -92,7 +92,7 @@ def aggregate_traffic_daily(date: str):
         SELECT
             segment_id,
             borough,
-            'CAST({date} AS DATE)'                                AS calendar_date,
+            CAST({date} AS DATE)                                AS calendar_date,
             YEAR(ingested_at)                       AS data_year,
             MONTH(ingested_at)                      AS month_of_year,
             WEEKOFYEAR(ingested_at)                 AS week_of_year,
@@ -128,7 +128,7 @@ def aggregate_citibike_hourly(date: str):
         SELECT
             station_id,
             DATE_TRUNC('hour', ingested_at)         AS hour_bucket,
-            'CAST({date} AS DATE)'                                AS calendar_date,
+            CAST({date} AS DATE)                                AS calendar_date,
             YEAR(ingested_at)                       AS data_year,
             MONTH(ingested_at)                      AS month_of_year,
             WEEKOFYEAR(ingested_at)                 AS week_of_year,
@@ -164,7 +164,7 @@ def aggregate_citibike_daily(date: str):
         INSERT INTO transit.agg_citibike_daily
         SELECT
             station_id,
-            'CAST({date} AS DATE)'                                AS calendar_date,
+            CAST({date} AS DATE)                                AS calendar_date,
             YEAR(ingested_at)                       AS data_year,
             MONTH(ingested_at)                      AS month_of_year,
             WEEKOFYEAR(ingested_at)                 AS week_of_year,
@@ -201,7 +201,7 @@ def aggregate_bus_hourly(date: str):
         SELECT
             line_name,
             DATE_TRUNC('hour', ingested_at)         AS hour_bucket,
-            'CAST({date} AS DATE)'                                AS calendar_date,
+            CAST({date} AS DATE)                                AS calendar_date,
             YEAR(ingested_at)                       AS data_year,
             MONTH(ingested_at)                      AS month_of_year,
             WEEKOFYEAR(ingested_at)                 AS week_of_year,
@@ -238,7 +238,7 @@ def aggregate_bus_daily(date: str):
         INSERT INTO transit.agg_bus_daily
         SELECT
             line_name,
-            'CAST({date} AS DATE)'                                AS calendar_date,
+            CAST({date} AS DATE)                                AS calendar_date,
             YEAR(ingested_at)                       AS data_year,
             MONTH(ingested_at)                      AS month_of_year,
             WEEKOFYEAR(ingested_at)                 AS week_of_year,
