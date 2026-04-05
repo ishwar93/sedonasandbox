@@ -20,16 +20,17 @@ def get_connection():
 
 def already_done(table: str, date_col: str, date_val: str) -> bool:
     """Check if a date has already been aggregated — makes every function idempotent."""
-    try:
-        with get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(f"""
-                    SELECT COUNT(*) FROM transit.{table}
-                    WHERE {date_col} = '{date_val}'
-                """)
-                return cursor.fetchone()[0] > 0
-    except Exception:
-        return False
+    # try:
+    #     with get_connection() as conn:
+    #         with conn.cursor() as cursor:
+    #             cursor.execute(f"""
+    #                 SELECT COUNT(*) FROM transit.{table}
+    #                 WHERE {date_col} = '{date_val}'
+    #             """)
+    #             return cursor.fetchone()[0] > 0
+    # except Exception:
+    #     return False
+    return False
 
 
 def run_sql(label: str, sql_str: str):
@@ -408,6 +409,7 @@ def aggregate_bus_weekly(week_of_year: int, week_of_month: int, month: int, data
             {week_of_year}          AS week_of_year,
             {week_of_month}         AS week_of_month,
             '{key}'                 AS week_start_date,
+            CONCAT({data_year}, '-', LPAD({month}, 2, '0')) AS month_year,
             AVG(unique_vehicles)    AS avg_vehicles,
             AVG(pct_full)           AS avg_pct_full,
             AVG(avg_passenger_load) AS avg_passenger_load,
