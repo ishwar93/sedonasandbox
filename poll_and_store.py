@@ -17,6 +17,23 @@ MTA_BUS_KEY          = os.environ['MTA_BUS_KEY']
 # One representative per feed group — no API key required since MTA opened access.
 FEED_REPRESENTATIVES = ["1", "A", "B", "G", "J", "N", "L", "SIR"]
 
+ALERT_FEEDS = {
+    'subway': 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fsubway-alerts.json',
+    'bus':    'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fbus-alerts.json',
+}
+
+ALERT_TYPE_PRIORITY = {
+    'Suspended':              35,
+    'Severe Delays':          29,
+    'Delays':                 26,
+    'Expect Delays':          12,
+    'Boarding Change':        10,
+    'Reroute':                10,
+    'Special Schedule':        5,
+    'Detour':                  5,
+    'No Scheduled Service':    1,
+    'Information':             1,
+}
 
 def get_connection():
     return sql.connect(
@@ -386,6 +403,288 @@ def check_row_counts():
     except Exception as e:
         print(f"  Row count error: {e}")
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ADD THESE CONSTANTS near the top of poll_and_store.py
+# alongside FEED_REPRESENTATIVES
+# ══════════════════════════════════════════════════════════════════════════════
+
+ALERT_FEEDS = {
+    'subway': 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fsubway-alerts.json',
+    'bus':    'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fbus-alerts.json',
+}
+
+# priority_level derived from alert_type — entity selectors carry only sort_order,
+# not a priority field. These values map to Mercury's priority enum used for
+# PageRank edge weight reduction.
+ALERT_TYPE_PRIORITY = {
+    'Suspended':            35,
+    'Severe Delays':        29,
+    'Delays':               26,
+    'Expect Delays':        12,
+    'Boarding Change':      10,
+    'Reroute':              10,
+    'Special Schedule':      5,
+    'Detour':                5,
+    'No Scheduled Service':  1,
+    'Information':           1,
+}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ADD THESE FUNCTIONS before the if __name__ == '__main__': block
+# ══════════════════════════════════════════════════════════════════════════════
+
+def upsert_alerts(alerts: list[dict], periods: list[dict], entities: list[dict]) -> int:
+    """
+    Batch upsert service alerts using MERGE with UNION ALL source.
+    Replaces active_periods and affected_entities with DELETE + INSERT.
+
+    MERGE batches 100 alerts per statement (~2-3 round trips total)
+    instead of one MERGE per alert (~200 round trips).
+
+    Parameter count: 100 rows x 10 cols = 1,000 per MERGE — well under
+    the Databricks 10,000 parameter limit.
+    """
+    if not alerts:
+        return 0
+
+    now        = datetime.utcnow().isoformat()
+    MERGE_BATCH = 100
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+
+                # ── Batched MERGE for service_alerts ──────────────────────────
+                # USING clause built from UNION ALL of SELECT literals.
+                # now is interpolated as a string literal (same value for all
+                # rows) to avoid inflating the parameter count.
+                for i in range(0, len(alerts), MERGE_BATCH):
+                    batch = alerts[i:i + MERGE_BATCH]
+
+                    union_rows = ' UNION ALL '.join(
+                        'SELECT ? AS alert_id, ? AS feed_source, ? AS agency_id, '
+                        '? AS header_text_plain, ? AS header_text_html, '
+                        '? AS mercury_alert_type, ? AS mercury_updated_at, '
+                        '? AS human_readable_period, ? AS is_planned, '
+                        '? AS is_active_now'
+                        for _ in batch
+                    )
+
+                    values = []
+                    for a in batch:
+                        values += [
+                            a['alert_id'],
+                            a['feed_source'],
+                            a['agency_id'],
+                            a['header_text_plain'],
+                            a['header_text_html'],
+                            a['mercury_alert_type'],
+                            a['mercury_updated_at'],
+                            a['human_readable_period'],
+                            a['is_planned'],
+                            a['is_active_now'],
+                        ]
+
+                    cursor.execute(f"""
+                        MERGE INTO transit.service_alerts AS t
+                        USING ({union_rows}) AS s
+                        ON t.alert_id = s.alert_id
+                        WHEN MATCHED THEN UPDATE SET
+                            is_active_now         = s.is_active_now,
+                            last_seen_at          = '{now}',
+                            mercury_updated_at    = s.mercury_updated_at,
+                            header_text_plain     = s.header_text_plain,
+                            header_text_html      = s.header_text_html,
+                            human_readable_period = s.human_readable_period,
+                            ingested_at           = '{now}'
+                        WHEN NOT MATCHED THEN INSERT (
+                            alert_id, feed_source, agency_id,
+                            header_text_plain, header_text_html,
+                            mercury_alert_type, mercury_updated_at,
+                            human_readable_period, is_planned,
+                            is_active_now, first_seen_at,
+                            last_seen_at, ingested_at
+                        ) VALUES (
+                            s.alert_id, s.feed_source, s.agency_id,
+                            s.header_text_plain, s.header_text_html,
+                            s.mercury_alert_type, s.mercury_updated_at,
+                            s.human_readable_period, s.is_planned,
+                            s.is_active_now, '{now}', '{now}', '{now}'
+                        )
+                    """, values)
+
+                # ── DELETE existing periods + entities for all alerts ──────────
+                # Both deletes share the same batched alert_id list.
+                alert_ids = [a['alert_id'] for a in alerts]
+                for i in range(0, len(alert_ids), 500):
+                    batch        = alert_ids[i:i + 500]
+                    placeholders = ', '.join(['?' for _ in batch])
+                    cursor.execute(
+                        f"DELETE FROM transit.service_alert_active_periods "
+                        f"WHERE alert_id IN ({placeholders})", batch
+                    )
+                    cursor.execute(
+                        f"DELETE FROM transit.service_alert_affected_entities "
+                        f"WHERE alert_id IN ({placeholders})", batch
+                    )
+
+                # ── Batched INSERT for active_periods ─────────────────────────
+                if periods:
+                    rows = [
+                        (p['alert_id'], p['period_seq'], p['starts_at'], p['ends_at'], now)
+                        for p in periods
+                    ]
+                    for i in range(0, len(rows), 500):
+                        batch        = rows[i:i + 500]
+                        placeholders = ', '.join(['(?, ?, ?, ?, ?)' for _ in batch])
+                        values       = [v for row in batch for v in row]
+                        cursor.execute(
+                            f"INSERT INTO transit.service_alert_active_periods "
+                            f"(alert_id, period_seq, starts_at, ends_at, ingested_at) "
+                            f"VALUES {placeholders}", values
+                        )
+
+                # ── Batched INSERT for affected_entities ──────────────────────
+                if entities:
+                    rows = [
+                        (e['alert_id'], e['agency_id'], e['route_id'],
+                         e['stop_id'], e['priority_level'], now)
+                        for e in entities
+                    ]
+                    for i in range(0, len(rows), 500):
+                        batch        = rows[i:i + 500]
+                        placeholders = ', '.join(['(?, ?, ?, ?, ?, ?)' for _ in batch])
+                        values       = [v for row in batch for v in row]
+                        cursor.execute(
+                            f"INSERT INTO transit.service_alert_affected_entities "
+                            f"(alert_id, agency_id, route_id, stop_id, priority_level, ingested_at) "
+                            f"VALUES {placeholders}", values
+                        )
+
+        return len(alerts)
+    except Exception as e:
+        print(f"  [service_alerts] write error: {e}")
+        return 0
+
+
+def fetch_alerts() -> tuple[list[dict], list[dict], list[dict]]:
+    """
+    Fetch subway and bus service alerts from MTA JSON feeds.
+    No API key required as of 2026.
+
+    JSON structure (real response verified):
+      { "entity": [ { "id": "lmm:alert:NNN", "alert": { ... } }, ... ] }
+
+    Key field notes:
+      - is_planned:  derived from id prefix (lmm:planned_work: = planned)
+      - priority_level: derived from mercury alert_type string — entity selectors
+                        carry only sort_order, NOT a priority field
+      - human_readable_active_period: single object {translation:[...]},
+                        NOT a list — unlike active_period which IS a list
+      - ends_at:     absent on open-ended (ongoing) alerts — stored as NULL
+
+    Returns three lists: alerts, active_periods, affected_entities
+    """
+    now    = datetime.utcnow()
+    now_ts = now.timestamp()
+    alerts, periods, entities = [], [], []
+
+    for feed_source, url in ALERT_FEEDS.items():
+        try:
+            resp = requests.get(url, timeout=15).json()
+        except Exception as e:
+            print(f"  [alerts:{feed_source}] fetch error: {e}")
+            continue
+
+        for entity in resp.get('entity', []):
+            raw      = entity.get('alert', {})
+            alert_id = str(entity.get('id', ''))
+            if not alert_id:
+                continue
+
+            # ── is_planned: id prefix, not a feed field ───────────────────────
+            # lmm:alert:NNN        = unplanned real-time disruption
+            # lmm:planned_work:NNN = scheduled planned work
+            is_planned = alert_id.startswith('lmm:planned_work:')
+
+            # ── Header text ───────────────────────────────────────────────────
+            header_trans = raw.get('header_text', {}).get('translation', [])
+            header_plain = next(
+                (t['text'] for t in header_trans if t.get('language') == 'en'),
+                next((t['text'] for t in header_trans), '')
+            )
+            header_html = next(
+                (t['text'] for t in header_trans if t.get('language') == 'en-html'),
+                ''
+            )
+
+            # ── Mercury alert fields ──────────────────────────────────────────
+            mercury    = raw.get('transit_realtime.mercury_alert', {})
+            alert_type = str(mercury.get('alert_type', ''))
+            updated_at = int(mercury.get('updated_at', 0) or 0)
+
+            # human_readable_active_period is a SINGLE object {translation:[...]}
+            # not a list — do not iterate it as a list
+            hrp          = mercury.get('human_readable_active_period', {})
+            hrp_trans    = hrp.get('translation', [])
+            human_readable = next(
+                (t['text'] for t in hrp_trans if t.get('language') == 'en'),
+                next((t['text'] for t in hrp_trans), '')
+            )
+
+            # ── Active periods ────────────────────────────────────────────────
+            is_active = False
+            for seq, ap in enumerate(raw.get('active_period', [])):
+                start = ap.get('start', 0)
+                end   = ap.get('end')              # None = open-ended / ongoing
+                periods.append({
+                    'alert_id':   alert_id,
+                    'period_seq': seq,
+                    'starts_at':  datetime.utcfromtimestamp(start).isoformat() if start else None,
+                    'ends_at':    datetime.utcfromtimestamp(end).isoformat()   if end   else None,
+                })
+                # is_active_now: any period that contains right now
+                if start <= now_ts <= (end if end else float('inf')):
+                    is_active = True
+
+            # ── Affected entities ─────────────────────────────────────────────
+            # priority_level comes from alert_type — entity selectors only carry
+            # sort_order. Stop entities have no mercury_entity_selector at all.
+            priority  = ALERT_TYPE_PRIORITY.get(alert_type, 0)
+            agency_id = ''
+            for ie in raw.get('informed_entity', []):
+                a_id     = str(ie.get('agency_id', ''))
+                route_id = str(ie.get('route_id', ''))
+                stop_id  = str(ie.get('stop_id', ''))
+                if a_id and not agency_id:
+                    agency_id = a_id
+                entities.append({
+                    'alert_id':      alert_id,
+                    'agency_id':     a_id,
+                    'route_id':      route_id,
+                    'stop_id':       stop_id,
+                    'priority_level': priority,
+                })
+
+            alerts.append({
+                'alert_id':             alert_id,
+                'feed_source':          feed_source,
+                'agency_id':            agency_id,
+                'header_text_plain':    header_plain,
+                'header_text_html':     header_html,
+                'mercury_alert_type':   alert_type,
+                'mercury_updated_at':   updated_at,
+                'human_readable_period': human_readable,
+                'is_planned':           is_planned,
+                'is_active_now':        is_active,
+            })
+
+    return alerts, periods, entities
+
+
+
+
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
@@ -422,3 +721,11 @@ if __name__ == "__main__":
     elapsed = (datetime.utcnow() - start).seconds
     print(f"\nCompleted in {elapsed}s")
     print(f"{'='*50}\n")
+
+
+    print("\nFetching MTA Service Alerts...")
+    alerts, periods, entities = fetch_alerts()
+    n = upsert_alerts(alerts, periods, entities)
+    print(f"  service_alerts:    {n:>5} alerts upserted")
+    print(f"  active_periods:    {len(periods):>5} periods written")
+    print(f"  affected_entities: {len(entities):>5} entities written")
