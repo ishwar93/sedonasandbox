@@ -3,8 +3,9 @@ name: Transit Data Poller
 on:
   schedule:
     
-    - cron: '0,30 10-23 * * *' 
-    - cron: '0,30 0-4 * * *'
+    - cron: '0 10-23 * * *' 
+    - cron: '0 0-3 * * *'
+    - cron: '0 4 * * *'
   workflow_dispatch:
 
 jobs:
