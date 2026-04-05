@@ -48,7 +48,7 @@ def run_sql(label: str, sql_str: str):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def aggregate_traffic_hourly(date: str):
-    if already_done('agg_traffic_hourly', 'calendar_date', date):
+    if already_done('agg_traffic_hourly', 'DATE(hour_bucket)', date):
         print(f"  [agg_traffic_hourly] {date} already done — skipping")
         return
     run_sql(f"agg_traffic_hourly {date}", f"""
@@ -57,7 +57,6 @@ def aggregate_traffic_hourly(date: str):
             segment_id,
             borough,
             DATE_TRUNC('hour', ingested_at)         AS hour_bucket,
-            CAST('{date}' AS DATE)                                AS calendar_date,
             YEAR(ingested_at)                       AS data_year,
             MONTH(ingested_at)                      AS month_of_year,
             WEEKOFYEAR(ingested_at)                 AS week_of_year,
@@ -92,7 +91,7 @@ def aggregate_traffic_daily(date: str):
         SELECT
             segment_id,
             borough,
-            CAST('{date}' AS DATE)                                AS calendar_date,
+            '{date}'                                AS calendar_date,
             YEAR(ingested_at)                       AS data_year,
             MONTH(ingested_at)                      AS month_of_year,
             WEEKOFYEAR(ingested_at)                 AS week_of_year,
@@ -107,6 +106,8 @@ def aggregate_traffic_daily(date: str):
             AVG(CASE WHEN HOUR(ingested_at) BETWEEN 17 AND 19 THEN speed END) AS avg_speed_pm_peak,
             AVG(CASE WHEN HOUR(ingested_at) >= 22
                       OR HOUR(ingested_at) <= 5    THEN speed END) AS avg_speed_overnight,
+            NULL                                    AS worst_hour,
+            NULL                                    AS best_hour,
             COUNT(*)                                AS sample_count
         FROM transit.traffic_speeds
         WHERE DATE(ingested_at) = '{date}'
@@ -120,7 +121,7 @@ def aggregate_traffic_daily(date: str):
 
 
 def aggregate_citibike_hourly(date: str):
-    if already_done('agg_citibike_hourly', 'calendar_date', date):
+    if already_done('agg_citibike_hourly', 'DATE(hour_bucket)', date):
         print(f"  [agg_citibike_hourly] {date} already done — skipping")
         return
     run_sql(f"agg_citibike_hourly {date}", f"""
@@ -128,13 +129,13 @@ def aggregate_citibike_hourly(date: str):
         SELECT
             station_id,
             DATE_TRUNC('hour', ingested_at)         AS hour_bucket,
-            CAST('{date}' AS DATE)                                AS calendar_date,
             YEAR(ingested_at)                       AS data_year,
             MONTH(ingested_at)                      AS month_of_year,
             WEEKOFYEAR(ingested_at)                 AS week_of_year,
             ((DAYOFMONTH(ingested_at) - 1) / 7 + 1) AS week_of_month,
             DAYOFWEEK(ingested_at)                  AS day_of_week,
             HOUR(ingested_at)                       AS hour_of_day,
+            CONCAT(YEAR(ingested_at), '-', LPAD(MONTH(ingested_at), 2, '0')) AS month_year,
             AVG(bikes_available)                    AS avg_bikes,
             MIN(bikes_available)                    AS min_bikes,
             MAX(bikes_available)                    AS max_bikes,
@@ -164,12 +165,13 @@ def aggregate_citibike_daily(date: str):
         INSERT INTO transit.agg_citibike_daily
         SELECT
             station_id,
-            CAST('{date}' AS DATE)                                AS calendar_date,
+            '{date}'                                AS calendar_date,
             YEAR(ingested_at)                       AS data_year,
             MONTH(ingested_at)                      AS month_of_year,
             WEEKOFYEAR(ingested_at)                 AS week_of_year,
             ((DAYOFMONTH(ingested_at) - 1) / 7 + 1) AS week_of_month,
             DAYOFWEEK(ingested_at)                  AS day_of_week,
+            CONCAT(YEAR(ingested_at), '-', LPAD(MONTH(ingested_at), 2, '0')) AS month_year,
             AVG(bikes_available)                    AS avg_bikes,
             AVG(ebikes_available)                   AS avg_ebikes,
             AVG(docks_available)                    AS avg_docks,
@@ -180,6 +182,8 @@ def aggregate_citibike_daily(date: str):
             AVG(CASE WHEN HOUR(ingested_at) BETWEEN 17 AND 19 AND bikes_available = 0 THEN 1.0 ELSE 0.0 END) AS pct_empty_pm_peak,
             AVG(CASE WHEN HOUR(ingested_at) >= 22
                       OR  HOUR(ingested_at) <= 5   AND bikes_available = 0 THEN 1.0 ELSE 0.0 END) AS pct_empty_overnight,
+            NULL                                    AS worst_hour,
+            NULL                                    AS best_hour,
             COUNT(*)                                AS sample_count
         FROM transit.citibike_status
         WHERE DATE(ingested_at) = '{date}'
@@ -193,7 +197,7 @@ def aggregate_citibike_daily(date: str):
 
 
 def aggregate_bus_hourly(date: str):
-    if already_done('agg_bus_hourly', 'calendar_date', date):
+    if already_done('agg_bus_hourly', 'DATE(hour_bucket)', date):
         print(f"  [agg_bus_hourly] {date} already done — skipping")
         return
     run_sql(f"agg_bus_hourly {date}", f"""
@@ -201,21 +205,23 @@ def aggregate_bus_hourly(date: str):
         SELECT
             line_name,
             DATE_TRUNC('hour', ingested_at)         AS hour_bucket,
-            CAST('{date}' AS DATE)                                AS calendar_date,
             YEAR(ingested_at)                       AS data_year,
             MONTH(ingested_at)                      AS month_of_year,
             WEEKOFYEAR(ingested_at)                 AS week_of_year,
             ((DAYOFMONTH(ingested_at) - 1) / 7 + 1) AS week_of_month,
             DAYOFWEEK(ingested_at)                  AS day_of_week,
             HOUR(ingested_at)                       AS hour_of_day,
+            CONCAT(YEAR(ingested_at), '-', LPAD(MONTH(ingested_at), 2, '0')) AS month_year,
             COUNT(DISTINCT vehicle_ref)             AS unique_vehicles,
-            AVG(CASE WHEN passenger_capacity > 0
-                THEN CAST(passenger_count AS DOUBLE) / passenger_capacity
-                ELSE NULL END)                      AS avg_passenger_load,
-            AVG(passenger_count)                    AS avg_passenger_count,
             AVG(CASE WHEN passenger_capacity > 0
                 AND  CAST(passenger_count AS DOUBLE) / passenger_capacity >= 0.9
                 THEN 1.0 ELSE 0.0 END)              AS pct_full,
+            AVG(passenger_count)                    AS avg_passenger_count,
+            AVG(CASE WHEN passenger_capacity > 0
+                THEN CAST(passenger_count AS DOUBLE) / passenger_capacity
+                ELSE NULL END)                      AS avg_passenger_load,
+            NULL                                    AS unique_destinations,
+
             COUNT(*)                                AS sample_count
         FROM transit.bus_positions
         WHERE DATE(ingested_at) = '{date}'
@@ -238,12 +244,13 @@ def aggregate_bus_daily(date: str):
         INSERT INTO transit.agg_bus_daily
         SELECT
             line_name,
-            CAST('{date}' AS DATE)                                AS calendar_date,
+            '{date}'                                AS calendar_date,
             YEAR(ingested_at)                       AS data_year,
             MONTH(ingested_at)                      AS month_of_year,
             WEEKOFYEAR(ingested_at)                 AS week_of_year,
             ((DAYOFMONTH(ingested_at) - 1) / 7 + 1) AS week_of_month,
             DAYOFWEEK(ingested_at)                  AS day_of_week,
+            CONCAT(YEAR(ingested_at), '-', LPAD(MONTH(ingested_at), 2, '0')) AS month_year,
             COUNT(DISTINCT vehicle_ref)             AS avg_vehicles,
             AVG(CASE WHEN passenger_capacity > 0
                 AND  CAST(passenger_count AS DOUBLE) / passenger_capacity >= 0.9
@@ -261,6 +268,8 @@ def aggregate_bus_daily(date: str):
                 THEN CAST(passenger_count AS DOUBLE) / passenger_capacity END) AS avg_load_overnight,
             MAX(CASE WHEN passenger_capacity > 0
                 THEN CAST(passenger_count AS DOUBLE) / passenger_capacity END) AS peak_vehicles,
+            NULL                                    AS worst_hour,
+            NULL                                    AS best_hour,
             COUNT(*)                                AS sample_count
         FROM transit.bus_positions
         WHERE DATE(ingested_at) = '{date}'
@@ -308,6 +317,10 @@ def aggregate_traffic_weekly(week_of_year: int, week_of_month: int, month: int, 
             AVG(CASE WHEN day_of_week = 1 THEN avg_speed END) AS avg_speed_sun,
             AVG(CASE WHEN hour_of_day BETWEEN 7  AND 19 THEN avg_speed END) AS avg_peak_speed,
             AVG(CASE WHEN hour_of_day < 7 OR hour_of_day > 19 THEN avg_speed END) AS avg_offpeak_speed,
+            NULL AS worst_day,
+            NULL AS best_day,
+            NULL AS worst_hour,
+            NULL AS best_hour,
             SUM(sample_count)   AS sample_count
         FROM transit.agg_traffic_hourly
         WHERE data_year = {data_year}
@@ -331,6 +344,7 @@ def aggregate_citibike_weekly(week_of_year: int, week_of_month: int, month: int,
             {week_of_year}      AS week_of_year,
             {week_of_month}     AS week_of_month,
             '{key}'             AS week_start_date,
+            CONCAT({data_year}, '-', LPAD({month}, 2, '0')) AS month_year,
             AVG(avg_bikes)      AS avg_bikes,
             AVG(avg_ebikes)     AS avg_ebikes,
             AVG(pct_time_empty) AS pct_time_empty,
@@ -343,6 +357,10 @@ def aggregate_citibike_weekly(week_of_year: int, week_of_month: int, month: int,
             AVG(CASE WHEN day_of_week = 6 THEN pct_time_empty END) AS pct_empty_fri,
             AVG(CASE WHEN day_of_week = 7 THEN pct_time_empty END) AS pct_empty_sat,
             AVG(CASE WHEN day_of_week = 1 THEN pct_time_empty END) AS pct_empty_sun,
+            NULL                                    AS worst_day,
+            NULL                                    AS best_day,
+            NULL                                    AS worst_hour,
+            NULL                                    AS best_hour,
             SUM(sample_count)   AS sample_count
         FROM transit.agg_citibike_hourly
         WHERE data_year = {data_year}
@@ -366,6 +384,7 @@ def aggregate_bus_weekly(week_of_year: int, week_of_month: int, month: int, data
             {week_of_year}          AS week_of_year,
             {week_of_month}         AS week_of_month,
             '{key}'                 AS week_start_date,
+            CONCAT({data_year}, '-', LPAD({month}, 2, '0')) AS month_year,
             AVG(unique_vehicles)    AS avg_vehicles,
             AVG(pct_full)           AS avg_pct_full,
             AVG(avg_passenger_load) AS avg_passenger_load,
@@ -378,6 +397,8 @@ def aggregate_bus_weekly(week_of_year: int, week_of_month: int, month: int, data
             AVG(CASE WHEN day_of_week = 1 THEN avg_passenger_load END) AS avg_load_sun,
             AVG(CASE WHEN hour_of_day BETWEEN 7  AND 19 THEN avg_passenger_load END) AS avg_load_peak,
             AVG(CASE WHEN hour_of_day < 7 OR hour_of_day > 19 THEN avg_passenger_load END) AS avg_load_offpeak,
+            NULL                                    AS worst_day,
+            NULL                                    AS best_day,
             SUM(sample_count)       AS sample_count
         FROM transit.agg_bus_hourly
         WHERE data_year = {data_year}
@@ -403,6 +424,7 @@ def aggregate_traffic_monthly(month: int, data_year: int):
             borough,
             {month}             AS month_of_year,
             {data_year}         AS data_year,
+            CONCAT({data_year}, '-', LPAD({month}, 2, '0')) AS month_year,
             AVG(avg_speed)      AS avg_speed,
             MIN(min_speed)      AS min_speed,
             MAX(max_speed)      AS max_speed,
@@ -429,6 +451,7 @@ def aggregate_citibike_monthly(month: int, data_year: int):
             station_id,
             {month}             AS month_of_year,
             {data_year}         AS data_year,
+            CONCAT({data_year}, '-', LPAD({month}, 2, '0')) AS month_year,
             AVG(avg_bikes)      AS avg_bikes,
             AVG(avg_ebikes)     AS avg_ebikes,
             AVG(avg_docks)      AS avg_docks,
@@ -454,6 +477,7 @@ def aggregate_bus_monthly(month: int, data_year: int):
             line_name,
             {month}                 AS month_of_year,
             {data_year}             AS data_year,
+            CONCAT({data_year}, '-', LPAD({month}, 2, '0')) AS month_year,
             AVG(avg_vehicles)       AS avg_vehicles,
             AVG(avg_pct_full)       AS avg_pct_full,
             AVG(avg_passenger_load) AS avg_passenger_load,
@@ -465,7 +489,144 @@ def aggregate_bus_monthly(month: int, data_year: int):
         GROUP BY line_name
     """)
 
+def aggregate_traffic_yearly(data_year: int):
+    if already_done('agg_traffic_yearly', 'data_year', str(data_year)):
+        print(f"  [agg_traffic_yearly] {data_year} already done — skipping")
+        return
+    run_sql(f"agg_traffic_yearly {data_year}", f"""
+        INSERT INTO transit.agg_traffic_yearly
+        SELECT
+            m.segment_id,
+            m.borough,
+            {data_year}                                             AS data_year,
+            AVG(m.avg_speed)                                        AS avg_speed,
+            MIN(m.min_speed)                                        AS min_speed,
+            MAX(m.max_speed)                                        AS max_speed,
+            AVG(m.stddev_speed)                                     AS stddev_speed,
+            AVG(m.avg_travel_time)                                  AS avg_travel_time,
+            AVG(m.avg_peak_speed)                                   AS avg_peak_speed,
+            AVG(m.avg_offpeak_speed)                                AS avg_offpeak_speed,
+            AVG(CASE WHEN w.day_of_week = 2 THEN w.avg_speed END)  AS avg_speed_monday,
+            AVG(CASE WHEN w.day_of_week = 6 THEN w.avg_speed END)  AS avg_speed_friday,
+            AVG(CASE WHEN w.day_of_week = 7 THEN w.avg_speed END)  AS avg_speed_saturday,
+            AVG(CASE WHEN w.day_of_week = 1 THEN w.avg_speed END)  AS avg_speed_sunday,
+            AVG(CASE WHEN m.month_of_year IN (1,2,3)   THEN m.avg_speed END) AS avg_speed_q1,
+            AVG(CASE WHEN m.month_of_year IN (4,5,6)   THEN m.avg_speed END) AS avg_speed_q2,
+            AVG(CASE WHEN m.month_of_year IN (7,8,9)   THEN m.avg_speed END) AS avg_speed_q3,
+            AVG(CASE WHEN m.month_of_year IN (10,11,12) THEN m.avg_speed END) AS avg_speed_q4,
+            (SELECT month_of_year FROM transit.agg_traffic_monthly m2
+             WHERE m2.segment_id = m.segment_id AND m2.data_year = {data_year}
+             ORDER BY avg_speed ASC  LIMIT 1)                       AS worst_month,
+            (SELECT month_of_year FROM transit.agg_traffic_monthly m2
+             WHERE m2.segment_id = m.segment_id AND m2.data_year = {data_year}
+             ORDER BY avg_speed DESC LIMIT 1)                       AS best_month,
+            (SELECT hour_of_day FROM transit.agg_traffic_hourly h
+             WHERE h.segment_id = m.segment_id AND h.data_year = {data_year}
+             GROUP BY hour_of_day ORDER BY AVG(avg_speed) ASC  LIMIT 1) AS worst_hour,
+            (SELECT hour_of_day FROM transit.agg_traffic_hourly h
+             WHERE h.segment_id = m.segment_id AND h.data_year = {data_year}
+             GROUP BY hour_of_day ORDER BY AVG(avg_speed) DESC LIMIT 1) AS best_hour,
+            NULL                                                    AS yoy_speed_change,
+            SUM(m.sample_count)                                     AS sample_count
+        FROM transit.agg_traffic_monthly m
+        LEFT JOIN transit.agg_traffic_weekly w
+            ON  w.segment_id    = m.segment_id
+            AND w.data_year     = m.data_year
+        WHERE m.data_year = {data_year}
+        GROUP BY m.segment_id, m.borough
+    """)
 
+
+def aggregate_citibike_yearly(data_year: int):
+    if already_done('agg_citibike_yearly', 'data_year', str(data_year)):
+        print(f"  [agg_citibike_yearly] {data_year} already done — skipping")
+        return
+    run_sql(f"agg_citibike_yearly {data_year}", f"""
+        INSERT INTO transit.agg_citibike_yearly
+        SELECT
+            m.station_id,
+            {data_year}                                                         AS data_year,
+            AVG(m.avg_bikes)                                                    AS avg_bikes,
+            AVG(m.avg_ebikes)                                                   AS avg_ebikes,
+            AVG(m.avg_docks)                                                    AS avg_docks,
+            AVG(m.pct_time_empty)                                               AS pct_time_empty,
+            AVG(m.pct_time_full)                                                AS pct_time_full,
+            1.0 - AVG(m.pct_time_empty)                                         AS reliability_score,
+            AVG(CASE WHEN m.month_of_year IN (1,2,3)    THEN m.reliability_score END) AS reliability_q1,
+            AVG(CASE WHEN m.month_of_year IN (4,5,6)    THEN m.reliability_score END) AS reliability_q2,
+            AVG(CASE WHEN m.month_of_year IN (7,8,9)    THEN m.reliability_score END) AS reliability_q3,
+            AVG(CASE WHEN m.month_of_year IN (10,11,12) THEN m.reliability_score END) AS reliability_q4,
+            AVG(CASE WHEN w.day_of_week BETWEEN 2 AND 6 THEN w.pct_time_empty END) AS pct_empty_weekday,
+            AVG(CASE WHEN w.day_of_week IN (1, 7)       THEN w.pct_time_empty END) AS pct_empty_weekend,
+            AVG(h.pct_time_empty) FILTER (WHERE h.hour_of_day BETWEEN 7 AND 9)     AS pct_empty_am_peak,
+            AVG(h.pct_time_empty) FILTER (WHERE h.hour_of_day BETWEEN 17 AND 19)   AS pct_empty_pm_peak,
+            (SELECT month_of_year FROM transit.agg_citibike_monthly m2
+             WHERE m2.station_id = m.station_id AND m2.data_year = {data_year}
+             ORDER BY reliability_score ASC  LIMIT 1)               AS worst_month,
+            (SELECT month_of_year FROM transit.agg_citibike_monthly m2
+             WHERE m2.station_id = m.station_id AND m2.data_year = {data_year}
+             ORDER BY reliability_score DESC LIMIT 1)               AS best_month,
+            NULL                                                    AS yoy_reliability_change,
+            SUM(m.sample_count)                                     AS sample_count
+        FROM transit.agg_citibike_monthly m
+        LEFT JOIN transit.agg_citibike_weekly w
+            ON  w.station_id    = m.station_id
+            AND w.data_year     = m.data_year
+        LEFT JOIN transit.agg_citibike_hourly h
+            ON  h.station_id    = m.station_id
+            AND h.data_year     = m.data_year
+        WHERE m.data_year = {data_year}
+        GROUP BY m.station_id
+    """)
+
+def aggregate_bus_yearly(data_year: int):
+    if already_done('agg_bus_yearly', 'data_year', str(data_year)):
+        print(f"  [agg_bus_yearly] {data_year} already done — skipping")
+        return
+    run_sql(f"agg_bus_yearly {data_year}", f"""
+        INSERT INTO transit.agg_bus_yearly
+        SELECT
+            m.line_name,
+            {data_year}                                                         AS data_year,
+            AVG(m.avg_vehicles)                                                 AS avg_vehicles,
+            AVG(m.avg_pct_full)                                                 AS avg_pct_full,
+            AVG(m.avg_passenger_load)                                           AS avg_passenger_load,
+            AVG(h.avg_passenger_count)                                          AS avg_passenger_count,
+            AVG(CASE WHEN m.month_of_year IN (1,2,3)    THEN m.avg_passenger_load END) AS avg_load_q1,
+            AVG(CASE WHEN m.month_of_year IN (4,5,6)    THEN m.avg_passenger_load END) AS avg_load_q2,
+            AVG(CASE WHEN m.month_of_year IN (7,8,9)    THEN m.avg_passenger_load END) AS avg_load_q3,
+            AVG(CASE WHEN m.month_of_year IN (10,11,12) THEN m.avg_passenger_load END) AS avg_load_q4,
+            AVG(h.avg_passenger_load) FILTER (WHERE h.hour_of_day BETWEEN 7  AND 9)  AS avg_load_am_peak,
+            AVG(h.avg_passenger_load) FILTER (WHERE h.hour_of_day BETWEEN 17 AND 19) AS avg_load_pm_peak,
+            AVG(h.avg_passenger_load) FILTER (WHERE h.hour_of_day < 7
+                                               OR   h.hour_of_day > 19)              AS avg_load_offpeak,
+            AVG(w.avg_passenger_load) FILTER (WHERE w.day_of_week BETWEEN 2 AND 6)   AS avg_load_weekday,
+            AVG(w.avg_passenger_load) FILTER (WHERE w.day_of_week IN (1, 7))         AS avg_load_weekend,
+            AVG(h.avg_passenger_load) FILTER (WHERE h.hour_of_day BETWEEN 7  AND 19) AS avg_vehicles_peak,
+            AVG(h.avg_passenger_load) FILTER (WHERE h.hour_of_day < 7
+                                               OR   h.hour_of_day > 19)              AS avg_vehicles_offpeak,
+            (SELECT month_of_year FROM transit.agg_bus_monthly m2
+             WHERE m2.line_name = m.line_name AND m2.data_year = {data_year}
+             ORDER BY avg_passenger_load DESC LIMIT 1)              AS worst_month,
+            (SELECT month_of_year FROM transit.agg_bus_monthly m2
+             WHERE m2.line_name = m.line_name AND m2.data_year = {data_year}
+             ORDER BY avg_passenger_load ASC  LIMIT 1)              AS best_month,
+            NULL                                                    AS yoy_load_change,
+            NULL                                                    AS yoy_frequency_change,
+            SUM(m.sample_count)                                     AS sample_count
+        FROM transit.agg_bus_monthly m
+        LEFT JOIN transit.agg_bus_weekly w
+            ON  w.line_name     = m.line_name
+            AND w.data_year     = m.data_year
+        LEFT JOIN transit.agg_bus_hourly h
+            ON  h.line_name     = m.line_name
+            AND h.data_year     = m.data_year
+        WHERE m.data_year = {data_year}
+        GROUP BY m.line_name
+    """)
+
+
+    
 # ══════════════════════════════════════════════════════════════════════════════
 # ORCHESTRATION — determines what to run based on current datetime
 # ══════════════════════════════════════════════════════════════════════════════
@@ -510,6 +671,11 @@ def run_aggregations():
     print(f"\nCompleted in {(datetime.utcnow() - now).seconds}s")
     print(f"{'='*50}\n")
 
+     if now.month == 1 and now.day == 1:
+        print("\nYearly aggregations (Jan 1 run)...")
+        aggregate_traffic_yearly(prev.year)
+        aggregate_citibike_yearly(prev.year)
+        aggregate_bus_yearly(prev.year)
 
 if __name__ == '__main__':
     run_aggregations()
