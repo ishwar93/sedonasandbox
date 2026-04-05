@@ -2,8 +2,9 @@ name: Transit Data Poller
 
 on:
   schedule:
-    # Every 30 min, 06:00–22:30 UTC (peak service hours)
-    - cron: '0,30 6-22 * * *'
+    
+    - cron: '0,30 10-23 * * *' 
+    - cron: '0,30 0-4 * * *'
   workflow_dispatch:
 
 jobs:

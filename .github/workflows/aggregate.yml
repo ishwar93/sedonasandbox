@@ -6,7 +6,7 @@ on:
     # Runs daily at 23:30 UTC — 30 min after midnight poll collects the day's last data
     # Sunday run also triggers weekly aggregations
     # 1st of month run also triggers monthly aggregations
-    - cron: '30 23 * * *'
+    - cron: '0 4 * * *'
   workflow_dispatch:
 
 jobs:
