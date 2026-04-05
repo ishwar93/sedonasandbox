@@ -671,7 +671,8 @@ def run_aggregations():
     print(f"\nCompleted in {(datetime.utcnow() - now).seconds}s")
     print(f"{'='*50}\n")
 
-     if now.month == 1 and now.day == 1:
+    # ── Yearly — runs on Jan 1 ──────────────────────────────────────────────
+    if now.month == 1 and now.day == 1:
         print("\nYearly aggregations (Jan 1 run)...")
         aggregate_traffic_yearly(prev.year)
         aggregate_citibike_yearly(prev.year)
