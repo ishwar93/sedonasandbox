@@ -75,7 +75,7 @@ def write_to_databricks(df: pl.DataFrame, table: str) -> int:
     rows       = df.to_dicts()
     cols       = list(rows[0].keys())
     col_names  = ', '.join(cols)
-    batch_size = 2000
+    batch_size = 500
     total      = 0
 
     try:
@@ -143,11 +143,11 @@ def fetch_citibike() -> tuple[pl.DataFrame, pl.DataFrame]:
     try:
         status_r = requests.get(
             "https://gbfs.lyft.com/gbfs/1.1/bkn/en/station_status.json",
-            timeout=5
+            timeout=15
         ).json()
         info_r = requests.get(
             "https://gbfs.lyft.com/gbfs/1.1/bkn/en/station_information.json",
-            timeout=5
+            timeout=15
         ).json()
     except Exception as e:
         print(f"  [citibike] fetch error: {e}")
@@ -195,7 +195,7 @@ def fetch_buses() -> pl.DataFrame:
                 "version": 2,
                 "VehicleMonitoringDetailLevel": "minimum"
             },
-            timeout=10
+            timeout=60
         ).json()
 
         delivery = resp['Siri']['ServiceDelivery']['VehicleMonitoringDelivery']
@@ -313,7 +313,7 @@ def fetch_traffic() -> pl.DataFrame:
         data = requests.get(
             "https://data.cityofnewyork.us/resource/i4gi-tjb9.json"
             "?$limit=1000&$order=data_as_of+DESC",
-            timeout=5
+            timeout=15
         ).json()
     except Exception as e:
         print(f"  [traffic] fetch error: {e}")
