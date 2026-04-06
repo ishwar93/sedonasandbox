@@ -20,17 +20,17 @@ def get_connection():
 
 def already_done(table: str, date_col: str, date_val: str) -> bool:
     """Check if a date has already been aggregated — makes every function idempotent."""
-    # try:
-    #     with get_connection() as conn:
-    #         with conn.cursor() as cursor:
-    #             cursor.execute(f"""
-    #                 SELECT COUNT(*) FROM transit.{table}
-    #                 WHERE {date_col} = '{date_val}'
-    #             """)
-    #             return cursor.fetchone()[0] > 0
-    # except Exception:
-    #     return False
-    return False
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(f"""
+                    SELECT COUNT(*) FROM transit.{table}
+                    WHERE {date_col} = '{date_val}'
+                """)
+                return cursor.fetchone()[0] > 0
+    except Exception:
+        return False
+    # return False
 
 
 def run_sql(label: str, sql_str: str):
