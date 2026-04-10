@@ -1,11 +1,13 @@
 
 import os
+import sys
 import requests
 import polars as pl
 from databricks import sql
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from nyct_gtfs import NYCTFeed
+from zoneinfo import ZoneInfo
 
 load_dotenv()
 
@@ -34,6 +36,19 @@ ALERT_TYPE_PRIORITY = {
     'No Scheduled Service':    1,
     'Information':             1,
 }
+
+NY_TZ = ZoneInfo("America/New_York")
+UTC_TZ = ZoneInfo("UTC")
+
+
+def within_nyc_poll_window(now_utc: datetime | None = None) -> bool:
+    """
+    Return True only for the allowed NYC local poll window:
+    hourly at :45 between 06:00 and 23:59 America/New_York.
+    """
+    now_utc = now_utc or datetime.utcnow().replace(tzinfo=UTC_TZ)
+    ny_now = now_utc.astimezone(NY_TZ)
+    return ny_now.minute == 45 and 6 <= ny_now.hour <= 23
 
 def get_connection():
     return sql.connect(
@@ -689,6 +704,14 @@ def fetch_alerts() -> tuple[list[dict], list[dict], list[dict]]:
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    if not within_nyc_poll_window():
+        ny_now = datetime.utcnow().replace(tzinfo=UTC_TZ).astimezone(NY_TZ)
+        print(
+            "Skipping poll: outside NYC window "
+            f"(local time {ny_now.strftime('%Y-%m-%d %H:%M:%S %Z')})"
+        )
+        sys.exit(0)
+
     start = datetime.utcnow()
     print(f"\n{'='*50}")
     print(f"Poll run: {start.strftime('%Y-%m-%d %H:%M:%S')} UTC")
