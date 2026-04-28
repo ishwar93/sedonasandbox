@@ -54,6 +54,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: transit-routegeom-tiles
+          retention-days: 7
           path: |
             build/transit_routegeom.geojsonseq
             public/transit_routegeom.mbtiles
