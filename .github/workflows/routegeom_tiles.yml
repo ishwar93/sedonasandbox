@@ -1,0 +1,60 @@
+name: RouteGeom Tiles
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Daily 05:00 UTC (adjust as needed)
+    - cron: "0 5 * * *"
+
+jobs:
+  build-route-tiles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install runtime deps
+        run: |
+          uv venv
+          uv pip install databricks-sql-connector
+
+      - name: Export route geometry from Databricks to GeoJSONSeq
+        run: |
+          . .venv/bin/activate
+          python scripts/export_routegeom_geojsonseq.py
+
+      - name: Build MBTiles with tippecanoe (Docker)
+        run: |
+          mkdir -p public
+          docker run --rm \
+            -v "$PWD:/work" \
+            -w /work \
+            ghcr.io/jtmiclat/tippecanoe-docker:latest \
+            tippecanoe \
+              -o public/transit_routegeom.mbtiles \
+              -l transit_routegeom \
+              -Z10 -z15 \
+              --read-parallel \
+              --drop-densest-as-needed \
+              --force \
+              build/transit_routegeom.geojsonseq
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: transit-routegeom-tiles
+          path: |
+            build/transit_routegeom.geojsonseq
+            public/transit_routegeom.mbtiles

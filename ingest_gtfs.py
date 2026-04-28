@@ -47,20 +47,28 @@ def write_to_databricks(df: pl.DataFrame, table: str) -> int:
     if df.is_empty():
         return 0
 
-    rows         = df.to_dicts()
-    cols         = list(rows[0].keys())
-    col_names    = ', '.join(cols)
-    batch_size   = 2000
-    total        = 0
+    rows       = df.to_dicts()
+    cols       = list(rows[0].keys())
+    num_cols   = len(cols)
+    col_names  = ', '.join(cols)
+
+    # Enforce Databricks 10k param limit with a safe margin
+    batch_size = max(1, 9000 // num_cols)
+    total      = 0
 
     try:
         with get_connection() as conn:
             with conn.cursor() as cursor:
                 for i in range(0, len(rows), batch_size):
                     batch = rows[i:i + batch_size]
-                    placeholders = ', '.join(f"({', '.join(['?' for _ in cols])})" for _ in batch)
+                    placeholders = ', '.join(
+                        f"({', '.join(['?' for _ in cols])})" for _ in batch
+                    )
                     values = [v for r in batch for v in r.values()]
-                    cursor.execute(f"INSERT INTO transit.{table} ({col_names}) VALUES {placeholders}", values)
+                    cursor.execute(
+                        f"INSERT INTO transit.{table} ({col_names}) VALUES {placeholders}",
+                        values
+                    )
                     total += len(batch)
                     print(f"  {table}: {total:,}", end='\r')
     except Exception as e:
@@ -69,6 +77,15 @@ def write_to_databricks(df: pl.DataFrame, table: str) -> int:
 
     print()
     return total
+
+def run_sql(label: str, sql_str: str):
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(sql_str)
+        print(f"  ✓ {label}")
+    except Exception as e:
+        print(f"  ✗ {label}: {e}")
 
 
 def delete_feed(feed_id: str):
@@ -187,6 +204,7 @@ def ingest_routes(zf: zipfile.ZipFile, feed_id: str) -> int:
         'agency_id':        'agency_id',
         'route_short_name': 'route_short_name',
         'route_type':       'route_type',
+        'route_color':      'route_color',
     }
 
     available = {k: v for k, v in rename_map.items() if k in df.columns}
@@ -194,6 +212,16 @@ def ingest_routes(zf: zipfile.ZipFile, feed_id: str) -> int:
 
     if 'agency_id' not in df.columns:
         df = df.with_columns(pl.lit('').alias('agency_id'))
+
+    if 'route_color' not in df.columns:
+        df = df.with_columns(pl.lit(None).cast(pl.Utf8).alias('route_color'))
+    else:
+        df = df.with_columns(
+            pl.when(pl.col('route_color').str.strip_chars() == '')
+            .then(None)
+            .otherwise(pl.col('route_color').str.strip_chars())
+            .alias('route_color')
+        )
 
     df = df.with_columns([
         pl.lit(feed_id).alias('feed_id'),
@@ -214,6 +242,7 @@ def ingest_trips(zf: zipfile.ZipFile, feed_id: str) -> int:
         'route_id':     'route_id',
         'service_id':   'service_id',
         'direction_id': 'direction_id',
+        'shape_id':     'shape_id',
     }
 
     available = {k: v for k, v in rename_map.items() if k in df.columns}
@@ -222,9 +251,13 @@ def ingest_trips(zf: zipfile.ZipFile, feed_id: str) -> int:
     if 'direction_id' not in df.columns:
         df = df.with_columns(pl.lit('0').alias('direction_id'))
 
+    if 'shape_id' not in df.columns: 
+        df = df.with_columns(pl.lit('').alias('shape_id'))
+
     df = df.with_columns([
         pl.lit(feed_id).alias('feed_id'),
         pl.col('direction_id').str.strip_chars().cast(pl.Int32),
+        pl.col('shape_id').cast(pl.Utf8)
     ])
 
     return write_to_databricks(df, 'gtfs_trips')
@@ -372,23 +405,105 @@ def derive_stop_connections(zf: zipfile.ZipFile, feed_id: str) -> int:
     print(f"  Derived {len(connections):,} stop connections for {feed_id}")
     return write_to_databricks(connections, 'gtfs_stop_connections')
 
+def apitable_routegeom():
+    run_sql("build WKT and geom", """
+    WITH shape_lines AS(
+    SELECT
+    feed_id,
+    shape_id,
+    st_geomfromwkt(
+        CONCAT(
+                'LINESTRING(',
+                    CONCAT_WS(
+                    ',', 
+                    TRANSFORM(
+                        SORT_ARRAY(
+                            COLLECT_LIST(
+                                NAMED_STRUCT(
+                                    'seq', shape_pt_sequence,
+                                    'coord', CONCAT(CAST(shape_pt_lon AS STRING), ' ',CAST(shape_pt_lat AS STRING) )
+                                )
+                            )
+                        ),
+                        p -> p.coord
+                    )
+                ),
+                ')'
+            ),
+            4326
+        ) AS line_geometry,
+    COUNT(*) AS point_count
+    FROM transit.gtfs_shapes
+    WHERE shape_pt_lat BETWEEN -90 AND 90
+    AND shape_pt_lon BETWEEN -180 AND 180
+    GROUP BY feed_id, shape_id
+    HAVING COUNT(*) >=2
+    ),
+    route_shapes AS (
+        SELECT
+            feed_id,
+            route_id,
+            shape_id,
+            COUNT(*) AS trip_count
+        FROM transit.gtfs_trips
+        WHERE shape_id IS NOT NULL
+        GROUP BY feed_id, route_id, shape_id
+    ),
+    final_rows AS (
+    SELECT
+        rs.feed_id,
+        rs.shape_id,
+        s1.line_geometry,
+        s1.point_count,
+        rs.route_id,
+        r.route_short_name,
+        r.route_color
+    FROM route_shapes rs
+    JOIN shape_lines s1
+        ON rs.feed_id = s1.feed_id
+        AND rs.shape_id = s1.shape_id
+    LEFT JOIN transit.gtfs_routes r
+        ON rs.feed_id = r.feed_id
+        AND rs.route_id = r.route_id
+    )
+    MERGE INTO transit.apitable_routegeom t
+    USING final_rows s
+    ON t.feed_id = s.feed_id
+    AND t.shape_id = s.shape_id
+    AND t.route_id = s.route_id
+    WHEN MATCHED THEN
+    UPDATE SET
+        t.line_geometry = s.line_geometry,
+        t.point_count = s.point_count,
+        t.route_short_name = s.route_short_name,
+        t.route_color = s.route_color
+    WHEN NOT MATCHED THEN
+    INSERT (feed_id, shape_id, line_geometry, point_count, route_id, route_short_name, route_color)
+    VALUES (s.feed_id, s.shape_id, s.line_geometry, s.point_count, s.route_id, s.route_short_name, s.route_color)
+    """)
+    return
 
-def ingest_feed(feed_id: str, url: str):
+
+
+def ingest_feed(feed_id: str, url: str, force: bool = False):
     print(f"\n{'-'*50}")
     print(f"Checking {feed_id}")
 
     remote_etag = get_remote_etag(url)
     stored_etag = get_stored_etag(feed_id)
 
-    if remote_etag and remote_etag == stored_etag:
-        print(f"  Unchanged — skipping")
-        return
+    if force:
+        print(f"  Force mode — skipping etag check")
+    else:
+        if remote_etag and remote_etag == stored_etag:
+            print(f"  Unchanged — skipping")
+            return
 
     print(f"  Changed — downloading...")
 
     try:
         resp = requests.get(url, timeout=120)
-        resp.raise_for_status()
+        resp.raise_for_status() 
         zf = zipfile.ZipFile(io.BytesIO(resp.content))
         print(f"  Downloaded ({len(resp.content)/1e6:.1f}MB)")
     except Exception as e:
@@ -437,8 +552,12 @@ if __name__ == '__main__':
     print(f"{'='*50}")
 
     for feed_id, url in FEEDS.items():
-        ingest_feed(feed_id, url)
+        ingest_feed(feed_id, url, force=True)
+
+    apitable_routegeom()
+    print("  apitable_routegeom: done")
 
     elapsed = (datetime.utcnow() - start).seconds
     print(f"\nCompleted in {elapsed}s")
     print(f"{'='*50}\n")
+

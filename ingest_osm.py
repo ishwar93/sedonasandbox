@@ -70,10 +70,14 @@ OSM_CATEGORY_MAP = {
     'doctors':          'Doctors',
     'hospital':         'Hospitals',
     'veterinary':       'Veterinarians',
+    'therapist':        'Counseling & Mental Health',
+    'fitness_centre':   'Gyms',
+    'swimming_pool':    'Swimming Pools',
+    'sports_centre':    'Sports Clubs',
     # amenity — financial
-    'bank':             'Banks & Credit Unions',
-    'atm':              'ATMs',
-    'bureau_de_change': 'Currency Exchange',
+    # 'bank':             'Banks & Credit Unions',
+    # 'atm':              'ATMs',
+    # 'bureau_de_change': 'Currency Exchange',
     # amenity — services
     'post_office':      'Post Offices',
     'library':          'Libraries',
@@ -91,6 +95,9 @@ OSM_CATEGORY_MAP = {
     'arts_centre':      'Arts & Entertainment',
     'casino':           'Casinos',
     'stripclub':        'Adult Entertainment',
+    'museum':           'Museums',
+    'gallery':          'Art Galleries',
+    'attraction':       'Attractions',
     # amenity — education
     'school':           'Schools',
     'university':       'Colleges & Universities',
@@ -99,11 +106,11 @@ OSM_CATEGORY_MAP = {
     'language_school':  'Language Schools',
     'music_school':     'Music Schools',
     # amenity — community
-    'place_of_worship': 'Religious Organizations',
-    'social_facility':  'Community Services',
-    'marketplace':      'Markets',
-    'courthouse':       'Government',
-    'embassy':          'Embassies & Consulates',
+    # 'place_of_worship': 'Religious Organizations',
+    # 'social_facility':  'Community Services',
+    # 'marketplace':      'Markets',
+    # 'courthouse':       'Government',
+    # 'embassy':          'Embassies & Consulates',
     # shop — food & grocery
     'supermarket':      'Grocery',
     'convenience':      'Convenience Stores',
@@ -113,65 +120,60 @@ OSM_CATEGORY_MAP = {
     'alcohol':          'Beer Wine & Spirits',
     'greengrocer':      'Fruits & Vegetables',
     # shop — retail
-    'clothes':          'Fashion',
-    'shoes':            'Shoe Stores',
-    'electronics':      'Electronics',
-    'hardware':         'Hardware Stores',
-    'furniture':        'Furniture Stores',
-    'florist':          'Florists',
-    'books':            'Bookstores',
-    'gift':             'Gift Shops',
-    'jewelry':          'Jewelry',
-    'optician':         'Eyewear & Opticians',
-    'sports':           'Sporting Goods',
-    'toys':             'Toy Stores',
-    'music':            'Musical Instruments & Teachers',
-    'pet':              'Pet Stores',
-    'bicycle':          'Bikes',
-    'car':              'Car Dealers',
-    'copyshop':         'Printing Services',
-    'dry_cleaning':     'Dry Cleaning',
-    'travel_agency':    'Travel Services',
-    'mobile_phone':     'Mobile Phones',
-    'computer':         'Computers',
-    'stationery':       'Office Equipment',
-    'variety_store':    'Dollar Stores',
-    'chemist':          'Health & Beauty',
-    'cosmetics':        'Cosmetics & Beauty Supply',
-    'art':              'Art Supplies',
-    'antiques':         'Antiques',
-    'second_hand':      'Thrift Stores',
+    # 'clothes':          'Fashion',
+    # 'shoes':            'Shoe Stores',
+    # 'electronics':      'Electronics',
+    # 'hardware':         'Hardware Stores',
+    # 'furniture':        'Furniture Stores',
+    # 'florist':          'Florists',
+    # 'books':            'Bookstores',
+    # 'gift':             'Gift Shops',
+    # 'jewelry':          'Jewelry',
+    # 'optician':         'Eyewear & Opticians',
+    # 'sports':           'Sporting Goods',
+    # 'toys':             'Toy Stores',
+    # 'music':            'Musical Instruments & Teachers',
+    # 'pet':              'Pet Stores',
+    # 'bicycle':          'Bikes',
+    # 'car':              'Car Dealers',
+    # 'copyshop':         'Printing Services',
+    # 'dry_cleaning':     'Dry Cleaning',
+    # 'travel_agency':    'Travel Services',
+    # 'mobile_phone':     'Mobile Phones',
+    # 'computer':         'Computers',
+    # 'stationery':       'Office Equipment',
+    # 'variety_store':    'Dollar Stores',
+    # 'chemist':          'Health & Beauty',
+    # 'cosmetics':        'Cosmetics & Beauty Supply',
+    # 'art':              'Art Supplies',
+    # 'antiques':         'Antiques',
+    # 'second_hand':      'Thrift Stores',
     # office
-    'lawyer':           'Law Offices',
-    'accountant':       'Accountants',
-    'financial':        'Financial Services',
-    'insurance':        'Insurance',
-    'real_estate':      'Real Estate',
-    'architect':        'Architects',
-    'engineer':         'Engineering',
-    'it':               'IT Services',
-    'advertising':      'Advertising',
-    'government':       'Government',
-    'ngo':              'Non-Profit Organizations',
-    'therapist':        'Counseling & Mental Health',
+    # 'lawyer':           'Law Offices',
+    # 'accountant':       'Accountants',
+    # 'financial':        'Financial Services',
+    # 'insurance':        'Insurance',
+    # 'real_estate':      'Real Estate',
+    # 'architect':        'Architects',
+    # 'engineer':         'Engineering',
+    # 'it':               'IT Services',
+    # 'advertising':      'Advertising',
+    # 'government':       'Government',
+    # 'ngo':              'Non-Profit Organizations',
     # tourism
-    'hotel':            'Hotels',
-    'hostel':           'Hostels',
-    'guest_house':      'Bed & Breakfast',
-    'museum':           'Museums',
-    'gallery':          'Art Galleries',
-    'attraction':       'Attractions',
-    'viewpoint':        'Scenic Viewpoints',
-    'information':      'Tourist Information',
-    # leisure
-    'fitness_centre':   'Gyms',
-    'swimming_pool':    'Swimming Pools',
-    'sports_centre':    'Sports Clubs',
-    'bowling_alley':    'Bowling',
-    'dance':            'Dance Studios',
-    'yoga':             'Yoga',
-    'escape_game':      'Escape Games',
-    'amusement_arcade': 'Arcades',
+    # 'hotel':            'Hotels',
+    # 'hostel':           'Hostels',
+    # 'guest_house':      'Bed & Breakfast',
+
+    # 'viewpoint':        'Scenic Viewpoints',
+    # 'information':      'Tourist Information',
+    # # leisure
+
+    # 'bowling_alley':    'Bowling',
+    # 'dance':            'Dance Studios',
+    # 'yoga':             'Yoga',
+    # 'escape_game':      'Escape Games',
+    # 'amusement_arcade': 'Arcades',
 }
 
 # OSM day abbreviations → full English day names
@@ -262,10 +264,7 @@ def get_primary_tag(tags: dict) -> tuple[str, str]:
 
 def get_category(osm_value: str) -> str:
     """Map an OSM tag value to a human-readable category string."""
-    return OSM_CATEGORY_MAP.get(
-        osm_value,
-        osm_value.replace('_', ' ').title()
-    )
+    return OSM_CATEGORY_MAP[osm_value]
 
 
 def resolve_days(day_spec: str) -> list[str]:
@@ -388,6 +387,7 @@ def ingest():
         return
 
     now = datetime.utcnow().isoformat()
+    
 
     buf_business   = []
     buf_categories = []
@@ -397,6 +397,7 @@ def ingest():
     skipped_no_coords  = 0
     skipped_no_name    = 0
     skipped_no_cat     = 0
+    skipped_not_in_map = 0
     parse_errors       = 0
 
     print("\nProcessing elements ...")
@@ -448,6 +449,9 @@ def ingest():
                     osm_key, osm_value = get_primary_tag(tags)
                     if not osm_value:
                         skipped_no_cat += 1
+                        continue
+                    if osm_value not in OSM_CATEGORY_MAP:
+                        skipped_not_in_map += 1
                         continue
 
                     osm_id = f"{el['type']}_{el['id']}"
@@ -511,6 +515,7 @@ def ingest():
     print(f"  Skipped (no category):      {skipped_no_cat:>8,}")
     print(f"  Parse errors:               {parse_errors:>8,}")
     print(f"  Businesses written:         {total_written:>8,}")
+    print(f"  Skipped (not in map):       {skipped_not_in_map:>8,}")
     print()
     print("  Verify in Databricks:")
     print("    SELECT COUNT(*) FROM transit.osm_business;")
