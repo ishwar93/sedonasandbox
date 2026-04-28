@@ -704,13 +704,13 @@ def fetch_alerts() -> tuple[list[dict], list[dict], list[dict]]:
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    if not within_nyc_poll_window():
-        ny_now = datetime.utcnow().replace(tzinfo=UTC_TZ).astimezone(NY_TZ)
-        print(
-            "Skipping poll: outside NYC window "
-            f"(local time {ny_now.strftime('%Y-%m-%d %H:%M:%S %Z')})"
-        )
-        sys.exit(0)
+    # if not within_nyc_poll_window():
+    #     ny_now = datetime.utcnow().replace(tzinfo=UTC_TZ).astimezone(NY_TZ)
+    #     print(
+    #         "Skipping poll: outside NYC window "
+    #         f"(local time {ny_now.strftime('%Y-%m-%d %H:%M:%S %Z')})"
+    #     )
+    #     sys.exit(0)
 
     start = datetime.utcnow()
     print(f"\n{'='*50}")
