@@ -377,21 +377,28 @@ def aggregate_citibike_monthly(month: int, data_year: int):
     run_sql(f"agg_citibike_monthly {key}", f"""
         INSERT INTO transit.agg_citibike_monthly
         SELECT
-            station_id,
+            w.station_id,
             {month}             AS month_of_year,
             {data_year}         AS data_year,
             CONCAT({data_year}, '-', LPAD({month}, 2, '0')) AS month_year,
-            AVG(avg_bikes)      AS avg_bikes,
-            AVG(avg_ebikes)     AS avg_ebikes,
-            AVG(avg_docks)      AS avg_docks,
-            AVG(pct_time_empty) AS pct_time_empty,
-            AVG(pct_time_full)  AS pct_time_full,
-            1.0 - AVG(pct_time_empty) AS reliability_score,
-            SUM(sample_count)   AS sample_count
-        FROM transit.agg_citibike_weekly
-        WHERE data_year = {data_year}
-        AND   month_of_year = {month}
-        GROUP BY station_id
+            AVG(w.avg_bikes)      AS avg_bikes,
+            AVG(w.avg_ebikes)     AS avg_ebikes,
+            MAX(h.avg_docks)      AS avg_docks,
+            AVG(w.pct_time_empty) AS pct_time_empty,
+            AVG(w.pct_time_full)  AS pct_time_full,
+            1.0 - AVG(w.pct_time_empty) AS reliability_score,
+            SUM(w.sample_count)   AS sample_count
+        FROM transit.agg_citibike_weekly w
+        LEFT JOIN (
+            SELECT station_id, AVG(avg_docks) AS avg_docks
+            FROM transit.agg_citibike_hourly
+            WHERE data_year = {data_year}
+            AND   month_of_year = {month}
+            GROUP BY station_id
+        ) h ON h.station_id = w.station_id
+        WHERE w.data_year = {data_year}
+        AND   w.month_of_year = {month}
+        GROUP BY w.station_id
     """)
 
 
@@ -455,6 +462,35 @@ def aggregate_bus_monthly(month: int, data_year: int):
         AND   month_of_year = {month}
         GROUP BY line_name
     """)
+
+
+def aggregate_traffic_monthly(month: int, data_year: int):
+    key = f"{data_year}-{month:02d}"
+    if already_done("agg_traffic_monthly", "month_year", key):
+        print(f"  [agg_traffic_monthly] {key} already done — skipping")
+        return
+    run_sql(f"agg_traffic_monthly {key}", f"""
+        INSERT INTO transit.agg_traffic_monthly
+        SELECT
+            segment_id,
+            borough,
+            {month}              AS month_of_year,
+            {data_year}          AS data_year,
+            '{key}'              AS month_year,
+            AVG(avg_speed)       AS avg_speed,
+            MIN(min_speed)       AS min_speed,
+            MAX(max_speed)       AS max_speed,
+            AVG(stddev_speed)    AS stddev_speed,
+            AVG(avg_travel_time) AS avg_travel_time,
+            AVG(avg_peak_speed)  AS avg_peak_speed,
+            AVG(avg_offpeak_speed) AS avg_offpeak_speed,
+            SUM(sample_count)    AS sample_count
+        FROM transit.agg_traffic_weekly
+        WHERE data_year = {data_year}
+        AND   month_of_year = {month}
+        GROUP BY segment_id, borough
+    """)
+
 
 def aggregate_traffic_yearly(data_year: int):
     if already_done('agg_traffic_yearly', 'data_year', str(data_year)):
@@ -629,11 +665,20 @@ def run_aggregations():
 
     # ── Monthly — runs on 1st of month ──────────────────────────────────────
     # now.day == 1 means yesterday was the last day of the previous month
-    if now.day == 1:
-        print("\nMonthly aggregations (1st of month run)...")
-        aggregate_traffic_monthly(prev.month, prev.year)
-        aggregate_citibike_monthly(prev.month, prev.year)
-        aggregate_bus_monthly(prev.month, prev.year)
+    #
+    # TEMPORARY: original guard commented out so monthly runs every invocation.
+    # Restore the block below and delete the "temporary" block before committing.
+    #
+    # if now.day == 1:
+    #     print("\nMonthly aggregations (1st of month run)...")
+    #     aggregate_traffic_monthly(prev.month, prev.year)
+    #     aggregate_citibike_monthly(prev.month, prev.year)
+    #     aggregate_bus_monthly(prev.month, prev.year)
+
+    print("\nMonthly aggregations (TEMPORARY — runs every time; restore 1st-of-month guard)...")
+    aggregate_traffic_monthly(prev.month, prev.year)
+    aggregate_citibike_monthly(prev.month, prev.year)
+    aggregate_bus_monthly(prev.month, prev.year)
 
     print(f"\nCompleted in {(datetime.utcnow() - now).seconds}s")
     print(f"{'='*50}\n")
