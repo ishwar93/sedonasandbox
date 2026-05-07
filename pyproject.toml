@@ -14,11 +14,18 @@ dependencies = [
     "graphifyy>=0.4.14",
     "h3>=4.4.2",
     "itsdangerous>=2.2.0",
+    "langchain-core>=1.3.2",
+    "langchain-ollama>=1.1.0",
+    "langgraph>=1.1.10",
+    "langsmith>=0.8.0",
     "nyct-gtfs>=2.0.0",             # 2.0.0+ = no api_key required
     "polars>=1.39.3",
     "pyspark>=4.1.1",
     "python-dotenv>=1.2.2",
     "requests>=2.33.0",
     "shapely>=2.1.2",
+    "datasketch>=1.6",
+    "rapidfuzz>=3.0",
+    "sqlglot>=30.7.0",
     "uvicorn>=0.44.0",
 ]
