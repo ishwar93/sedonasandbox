@@ -209,7 +209,13 @@ def schema_linker_node(state: NLSQLState) -> NLSQLState:
     # Only fires when draft SQL contains quoted string literals.
     # Returns [] gracefully if LSH index not yet built.
     draft_literals = extract_literals_from_sql(linking.draft_sql)
-    lsh_hints = query_lsh(draft_literals)
+    # Filter LSH candidates to linked tables only — prevents cross-table hint
+    # confusion where LSH returns a hit from a table not in the focused schema.
+    # Within-table multiple hits are kept: the LLM can pick the best one.
+    lsh_hints = [
+        h for h in query_lsh(draft_literals)
+        if h["table"] in linking.linked_tables
+    ]
     if lsh_hints:
         state["value_hints"] = lsh_hints
         logger.info(
