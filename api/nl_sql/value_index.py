@@ -85,8 +85,9 @@ LITERAL_COLUMNS: list[dict] = [
     {"table": "transit.geo_boundaries",              "column": "boundary_name"},
     {"table": "transit.geo_boundaries",              "column": "borough_name"},
     # ── geo_aliases ──────────────────────────────────────────────────────────
-    {"table": "transit.geo_aliases",                 "column": "alias_text"},
-    {"table": "transit.geo_aliases",                 "column": "boundary_name"},
+    # TODO: uncomment once geo_aliases table is ingested
+    # {"table": "transit.geo_aliases",                 "column": "alias_text"},
+    # {"table": "transit.geo_aliases",                 "column": "boundary_name"},
     # ── osm_business ─────────────────────────────────────────────────────────
     {"table": "transit.osm_business",                "column": "osm_value"},
     {"table": "transit.osm_business",                "column": "name"},
@@ -188,8 +189,8 @@ class ValueIndex:
             column = entry["column"]
             try:
                 rows = db_query(
-                    f"SELECT DISTINCT `{column}` FROM {table} "
-                    f"WHERE `{column}` IS NOT NULL LIMIT {_N_SAMPLE}"
+                    f"SELECT DISTINCT {column} FROM {table} "
+                    f"WHERE {column} IS NOT NULL LIMIT {_N_SAMPLE}"
                 )
             except Exception as exc:
                 logger.warning("value_index.build: sample failed %s.%s: %s", table, column, exc)
@@ -275,8 +276,8 @@ class ValueIndex:
             for col in cols:
                 try:
                     rows = db_query(
-                        f"SELECT DISTINCT `{col}` FROM {table} "
-                        f"WHERE `{col}` IS NOT NULL LIMIT {_N_SAMPLE_SIGNAL2}"
+                        f"SELECT DISTINCT {col} FROM {table} "
+                        f"WHERE {col} IS NOT NULL LIMIT {_N_SAMPLE_SIGNAL2}"
                     )
                 except Exception as exc:
                     logger.debug("value_index.sample_and_match: sample failed %s.%s: %s", table, col, exc)
