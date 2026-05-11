@@ -46,8 +46,8 @@ logger = logging.getLogger(__name__)
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 _NUM_PERM          = 64     # MinHash permutations — higher = more accurate, more memory
-_LSH_THRESHOLD     = 0.2   # Jaccard threshold for LSH candidate retrieval
-_N_SAMPLE          = 1000  # distinct values sampled per column at build time
+_LSH_THRESHOLD     = 0.3   # Jaccard threshold for LSH retrieval (raised from 0.2 to reduce false positives)
+_N_SAMPLE          = 5000  # distinct values sampled per column at build time
 _N_SAMPLE_SIGNAL2  = 30    # distinct values sampled per column at Signal-2 time
 _PARTIAL_THRESHOLD = 60    # rapidfuzz partial_ratio threshold (0-100)
 _MAX_HINTS         = 8     # cap on value hints returned to the prompt
@@ -69,8 +69,14 @@ _STOPWORDS = frozenset({
 # geometry, and any column where fuzzy matching adds no value.
 
 LITERAL_COLUMNS: list[dict] = [
-    # ── apitable_combined_locations ──────────────────────────────────────────
-    {"table": "transit.apitable_combined_locations", "column": "location_name"},
+    # ── apitable_combined_locations ───────────────────────────────────────────
+    # location_name has 12541 distinct values total (bus stops dominate).
+    # Index subway + citibike separately to ensure they're covered.
+    # Bus stops are too numerous (9806) and rarely need exact literal matching.
+    {"table": "transit.apitable_combined_locations", "column": "location_name",
+     "where": "location_type = 'subway'"},
+    {"table": "transit.apitable_combined_locations", "column": "location_name",
+     "where": "location_type = 'citibike'"},
     {"table": "transit.apitable_combined_locations", "column": "location_type"},
     # ── gtfs_routes ──────────────────────────────────────────────────────────
     {"table": "transit.gtfs_routes",                 "column": "route_short_name"},
@@ -96,15 +102,17 @@ LITERAL_COLUMNS: list[dict] = [
     {"table": "transit.bus_positions",               "column": "line_name"},
     {"table": "transit.subway_positions",            "column": "route_id"},
     # ── traffic_speeds ───────────────────────────────────────────────────────
-    # TODO: uncomment once traffic_speeds schema is confirmed (link_name column unresolved)
-    # {"table": "transit.traffic_speeds",              "column": "borough"},
-    # {"table": "transit.traffic_speeds",              "column": "link_name"},
+    
+    {"table": "transit.traffic_speeds",              "column": "borough"},
+    {"table": "transit.traffic_speeds",              "column": "data_as_of"},
 ]
 
-# Group by table for efficient Signal-2 sampling
+# Group by table for efficient Signal-2 sampling (deduplicate column names)
 _COLS_BY_TABLE: dict[str, list[str]] = {}
 for _entry in LITERAL_COLUMNS:
-    _COLS_BY_TABLE.setdefault(_entry["table"], []).append(_entry["column"])
+    cols = _COLS_BY_TABLE.setdefault(_entry["table"], [])
+    if _entry["column"] not in cols:
+        cols.append(_entry["column"])
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -149,7 +157,13 @@ def _extract_literals_from_sql(sql: str) -> list[str]:
     These are the candidate WHERE-clause values to look up in LSH.
     Example: WHERE location_name = 'Atlantic Av' → ['Atlantic Av']
     """
-    return re.findall(r"'([^']{2,})'", sql)
+    raw = re.findall(r"'([^']{2,})'", sql)
+    cleaned = []
+    for lit in raw:
+        stripped = lit.strip('%').strip('_').strip()
+        if len(stripped) >= 2:
+            cleaned.append(stripped)
+    return cleaned
 
 
 # ── ValueIndex ────────────────────────────────────────────────────────────────
@@ -190,9 +204,11 @@ class ValueIndex:
             table  = entry["table"]
             column = entry["column"]
             try:
+                where_clause = entry.get("where", "")
+                where_sql = f"WHERE {where_clause} AND {column} IS NOT NULL" if where_clause else f"WHERE {column} IS NOT NULL"
                 rows = db_query(
                     f"SELECT DISTINCT {column} FROM {table} "
-                    f"WHERE {column} IS NOT NULL LIMIT {_N_SAMPLE}"
+                    f"{where_sql} LIMIT {_N_SAMPLE}"
                 )
             except Exception as exc:
                 logger.warning("value_index.build: sample failed %s.%s: %s", table, column, exc)
