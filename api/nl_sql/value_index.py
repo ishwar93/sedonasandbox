@@ -82,8 +82,9 @@ LITERAL_COLUMNS: list[dict] = [
     # ── citibike_stations ─────────────────────────────────────────────────────
     {"table": "transit.citibike_stations",           "column": "station_name"},
     # ── geo_boundaries ───────────────────────────────────────────────────────
-    {"table": "transit.geo_boundaries",              "column": "boundary_name"},
-    {"table": "transit.geo_boundaries",              "column": "borough_name"},
+    # TODO: uncomment once geo_boundaries table is ingested
+    # {"table": "transit.geo_boundaries",              "column": "boundary_name"},
+    # {"table": "transit.geo_boundaries",              "column": "borough_name"},
     # ── geo_aliases ──────────────────────────────────────────────────────────
     # TODO: uncomment once geo_aliases table is ingested
     # {"table": "transit.geo_aliases",                 "column": "alias_text"},
@@ -95,8 +96,9 @@ LITERAL_COLUMNS: list[dict] = [
     {"table": "transit.bus_positions",               "column": "line_name"},
     {"table": "transit.subway_positions",            "column": "route_id"},
     # ── traffic_speeds ───────────────────────────────────────────────────────
-    {"table": "transit.traffic_speeds",              "column": "borough"},
-    {"table": "transit.traffic_speeds",              "column": "link_name"},
+    # TODO: uncomment once traffic_speeds schema is confirmed (link_name column unresolved)
+    # {"table": "transit.traffic_speeds",              "column": "borough"},
+    # {"table": "transit.traffic_speeds",              "column": "link_name"},
 ]
 
 # Group by table for efficient Signal-2 sampling
