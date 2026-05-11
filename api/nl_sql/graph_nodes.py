@@ -261,6 +261,22 @@ def sql_generator_node(state: NLSQLState) -> NLSQLState:
     On retry: error context and/or value hints are injected into the prompt
     so the LLM knows what went wrong and what DB values to use.
     """
+    # Increment attempt counter on every retry call.
+    # A retry is detected when error is set (validator/executor error path).
+    # Signal-2 retries are NOT incremented here — value_hint_injector_node handles that.
+    if state.get("error") is not None:
+        state["attempt"] = state["attempt"] + 1
+        logger.info("sql_generator_node: retry attempt=%d", state["attempt"])
+        if state["attempt"] > _MAX_RETRIES:
+            state["final_answer"] = {
+                "error":   state.get("error", "Max retries exceeded"),
+                "signal":  "max_retries_exceeded",
+                "sql":     state.get("sql", ""),
+                "rows":    [],
+                "attempt": state["attempt"],
+            }
+            return state
+
     prompt = _build_sql_prompt(
         question       = state["question"],
         focused_schema = state["focused_schema"],   # from state — never rebuilt
@@ -449,8 +465,7 @@ def route_after_validator(state: NLSQLState) -> str:
         return "end"
 
     if state["attempt"] < _MAX_RETRIES:
-        state["attempt"] = state["attempt"] + 1
-        logger.info("route_after_validator: syntax retry attempt=%d", state["attempt"])
+        logger.info("route_after_validator: syntax error -> sql_generator retry")
         return "sql_generator"
 
     state["final_answer"] = {
@@ -477,8 +492,7 @@ def route_after_executor(state: NLSQLState) -> str:
 
     if error:
         if state["attempt"] < _MAX_RETRIES:
-            state["attempt"] = state["attempt"] + 1
-            logger.info("route_after_executor: db error retry attempt=%d", state["attempt"])
+            logger.info("route_after_executor: db error -> sql_generator retry (attempt=%d)", state["attempt"])
             return "sql_generator"
         state["final_answer"] = {
             "error":   error,
