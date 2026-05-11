@@ -116,7 +116,7 @@ transit.geo_boundaries: boundary_type TEXT ('borough'|'neighborhood'), boundary_
 transit.geo_aliases: alias_text TEXT, boundary_type TEXT, boundary_name TEXT
 transit.subway_positions: trip_id TEXT, route_id TEXT, direction TEXT, location_stop TEXT, location_status TEXT, ingested_at TIMESTAMP
 transit.bus_positions: vehicle_ref TEXT, line_name TEXT, lat DOUBLE, lon DOUBLE, passenger_count INT, passenger_capacity INT, ingested_at TIMESTAMP (filter last 2h)
-transit.traffic_speeds: segment_id TEXT, link_name TEXT, borough TEXT, speed DOUBLE, ingested_at TIMESTAMP
+transit.traffic_speeds: segment_id TEXT, data_as_of TEXT, borough TEXT, speed DOUBLE, ingested_at TIMESTAMP
 transit.osm_business: osm_id TEXT, name TEXT, osm_value TEXT, lat DOUBLE, lon DOUBLE, postal_code TEXT
 transit.osm_business_hours: osm_id TEXT, day_of_week TEXT, open_time TEXT, close_time TEXT
 transit.gtfs_feed_versions: feed_id TEXT, feed_type TEXT, downloaded_at TIMESTAMP"""
@@ -342,46 +342,65 @@ def executor_node(state: NLSQLState) -> NLSQLState:
     return state
 
 
-# ════════════════════════════════════════════════════════════════════════════
-#  NODE 5: value_hint_injector_node  (Signal-2 retry path only)
-# ════════════════════════════════════════════════════════════════════════════
+# ============================================================================
+#  NODE 5: value_hint_injector_node  (Signal-2 path only)
+# ============================================================================
+
+# Known live/operational tables that may be empty during early ingestion.
+_LIVE_TABLES = frozenset({
+    "transit.citibike_status",
+    "transit.subway_positions",
+    "transit.bus_positions",
+    "transit.traffic_speeds",
+    "transit.service_alerts",
+    "transit.service_alert_affected_entities",
+    "transit.service_alert_active_periods",
+})
+
+
+def _tables_are_empty(linked_tables: list[str]) -> bool:
+    """
+    Check if ANY linked table has zero rows.
+    Non-fatal on DB error: returns False so Signal-2 is attempted
+    rather than falsely reporting Signal-3.
+    """
+    for table in linked_tables:
+        try:
+            rows = db_query(f"SELECT COUNT(*) AS n FROM {table}")
+            if rows and list(rows[0].values())[0] == 0:
+                logger.info("_tables_are_empty: %s has zero rows", table)
+                return True
+        except Exception as exc:
+            logger.debug("_tables_are_empty: count failed for %s: %s", table, exc)
+    return False
+
 
 def value_hint_injector_node(state: NLSQLState) -> NLSQLState:
     """
-    Signal-2 retry preparation node.
-
-    Fires ONLY when executor returns empty rows and retry budget remains.
-    Calls sample_and_match (rapidfuzz partial_ratio) against the linked tables
-    to find column-grounded DB values similar to question keywords.
-    Sets signal="signal_2_empty_rows" for LangSmith observability.
-
-    The sql_generator_node picks up state["value_hints"] on the next call
-    and injects them as SQL comments so the LLM uses the correct literal values.
+    Signal-2: samples DB values and fuzzy-matches against question keywords.
+    Increments attempt HERE so routing functions stay pure (no state mutation).
     """
     hints = sample_and_match(
         question=state["question"],
         linked_tables=state["linked_tables"],
     )
     state["value_hints"] = hints
-    state["signal"] = "signal_2_empty_rows"
+    state["signal"]      = "signal_2_empty_rows"
+    state["attempt"]     = state["attempt"] + 1
 
     logger.info(
-        "value_hint_injector_node: signal_2 matched=%d hints for question=%r",
-        len(hints), state["question"][:60],
+        "value_hint_injector_node: signal_2 matched=%d hints attempt now=%d",
+        len(hints), state["attempt"],
     )
     return state
 
 
-# ════════════════════════════════════════════════════════════════════════════
+# ============================================================================
 #  NODE 6: result_checker_node
-# ════════════════════════════════════════════════════════════════════════════
+# ============================================================================
 
 def result_checker_node(state: NLSQLState) -> NLSQLState:
-    """
-    Terminal success node. Assembles final_answer from executor output.
-    Reached on successful execution (rows present, or empty after retry budget
-    exhausted — we return empty rather than hide the result from the caller).
-    """
+    """Terminal success node. Assembles final_answer."""
     state["final_answer"] = {
         "sql":           state["sql"],
         "rows":          state["rows"],
@@ -398,50 +417,11 @@ def result_checker_node(state: NLSQLState) -> NLSQLState:
     return state
 
 
-# ════════════════════════════════════════════════════════════════════════════
-#  HELPERS for routing
-# ════════════════════════════════════════════════════════════════════════════
-
-# Known live/operational tables that may be empty during early ingestion.
-_LIVE_TABLES = frozenset({
-    "transit.citibike_status",
-    "transit.subway_positions",
-    "transit.bus_positions",
-    "transit.traffic_speeds",
-    "transit.service_alerts",
-    "transit.service_alert_affected_entities",
-    "transit.service_alert_active_periods",
-})
-
-
-def _tables_are_empty(linked_tables: list[str]) -> bool:
-    """
-    Check if ANY of the linked tables contains zero rows.
-
-    Called before Signal-2 retry to distinguish:
-      - Signal-2: table has data, WHERE clause matched nothing (retry useful)
-      - Signal-3: table has no data yet (ingestion incomplete, retry pointless)
-
-    Non-fatal on DB error — returns False so Signal-2 retry is attempted
-    rather than falsely reporting Signal-3.
-    """
-    for table in linked_tables:
-        try:
-            rows = db_query(f"SELECT COUNT(*) AS n FROM {table}")
-            if rows and list(rows[0].values())[0] == 0:
-                logger.info("_tables_are_empty: %s has zero rows (ingestion incomplete)", table)
-                return True
-        except Exception as exc:
-            logger.debug("_tables_are_empty: count failed for %s: %s", table, exc)
-    return False
-
-
-# ════════════════════════════════════════════════════════════════════════════
-#  ROUTING FUNCTIONS (conditional edges)
-# ════════════════════════════════════════════════════════════════════════════
+# ============================================================================
+#  ROUTING FUNCTIONS — return strings only, minimal state mutation
+# ============================================================================
 
 def route_after_schema_linker(state: NLSQLState) -> str:
-    """Signal-1 → end. Otherwise → sql_generator."""
     if state.get("signal") == "signal_1_no_tables":
         return "end"
     return "sql_generator"
@@ -449,10 +429,10 @@ def route_after_schema_linker(state: NLSQLState) -> str:
 
 def route_after_validator(state: NLSQLState) -> str:
     """
-    No error → executor.
-    Non-SELECT (hard fail, no retry) → end.
-    Syntax error + budget → sql_generator (increment attempt).
-    Syntax error + no budget → end.
+    No error -> executor.
+    Non-SELECT -> end (hard fail).
+    Syntax error + budget -> sql_generator (increment attempt here).
+    Syntax error + no budget -> end.
     """
     error = state.get("error")
     if not error:
@@ -469,7 +449,7 @@ def route_after_validator(state: NLSQLState) -> str:
         return "end"
 
     if state["attempt"] < _MAX_RETRIES:
-        state["attempt"] += 1
+        state["attempt"] = state["attempt"] + 1
         logger.info("route_after_validator: syntax retry attempt=%d", state["attempt"])
         return "sql_generator"
 
@@ -485,19 +465,19 @@ def route_after_validator(state: NLSQLState) -> str:
 
 def route_after_executor(state: NLSQLState) -> str:
     """
-    DB error + budget → sql_generator (increment attempt).
-    DB error + no budget → end.
-    Empty rows + Signal-3 (table structurally empty) → end with clarification.
-    Empty rows + budget → value_hint_injector (increment attempt) [Signal-2].
-    Empty rows + no budget → result_checker (return empty, don't hide it).
-    Rows returned → result_checker.
+    Rows returned -> result_checker.
+    DB error + budget -> sql_generator (increment attempt here).
+    DB error + no budget -> end.
+    Empty rows: Signal-3 check first (table empty = ingestion incomplete),
+    then Signal-2 (table has data, WHERE matched nothing).
+    Signal-2 routes to value_hint_injector which increments attempt.
     """
     error = state.get("error")
     rows  = state.get("rows", [])
 
     if error:
         if state["attempt"] < _MAX_RETRIES:
-            state["attempt"] += 1
+            state["attempt"] = state["attempt"] + 1
             logger.info("route_after_executor: db error retry attempt=%d", state["attempt"])
             return "sql_generator"
         state["final_answer"] = {
@@ -510,18 +490,15 @@ def route_after_executor(state: NLSQLState) -> str:
         return "end"
 
     if len(rows) == 0:
-        # ── Signal-3 check: is the table itself empty? ────────────────────────
-        # Must check before Signal-2 retry — retrying with different literal
-        # values won't help if the table has no rows due to incomplete ingestion.
         if _tables_are_empty(state["linked_tables"]):
             is_live = any(t in _LIVE_TABLES for t in state["linked_tables"])
             clarification = (
-                "This query involves live operational data (real-time feeds) "
-                "that hasn't been ingested yet. The polling pipeline may still "
-                "be warming up — try again in a few minutes."
+                "This query involves live operational data that has not been "
+                "ingested yet. The polling pipeline may still be warming up "
+                "-- try again in a few minutes."
                 if is_live else
-                "The data for this query exists in the database schema but "
-                "hasn't been populated yet. Try again after the next ingestion run."
+                "The data for this query exists in the schema but has not been "
+                "populated yet. Try again after the next ingestion run."
             )
             state["signal"] = "signal_3_data_not_available"
             state["final_answer"] = {
@@ -533,16 +510,14 @@ def route_after_executor(state: NLSQLState) -> str:
                 "attempt":       state["attempt"],
             }
             logger.warning(
-                "route_after_executor: SIGNAL_3 — empty table(s) %s",
+                "route_after_executor: SIGNAL_3 empty table(s) %s",
                 state["linked_tables"],
             )
             return "end"
 
-        # ── Signal-2: table has data, WHERE clause matched nothing ────────────
         if state["attempt"] < _MAX_RETRIES:
-            state["attempt"] += 1
             logger.info(
-                "route_after_executor: signal_2 empty rows, injecting value hints attempt=%d",
+                "route_after_executor: signal_2 empty rows attempt=%d -> value_hint_injector",
                 state["attempt"],
             )
             return "value_hint_injector"
