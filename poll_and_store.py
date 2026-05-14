@@ -41,6 +41,18 @@ NY_TZ = ZoneInfo("America/New_York")
 UTC_TZ = ZoneInfo("UTC")
 
 
+def _ts_to_sec(ts):
+    """Normalize a POSIX timestamp that may be in milliseconds to seconds.
+
+    The MTA Mercury CMS sometimes emits active_period timestamps in milliseconds
+    rather than the seconds mandated by the GTFS-RT spec.  Any value > 1e10
+    (which would be year 2286 if interpreted as seconds) is treated as ms.
+    """
+    if ts and ts > 1e10:
+        return ts / 1000
+    return ts
+
+
 def within_nyc_poll_window(now_utc: datetime | None = None) -> bool:
     """
     Return True only for the allowed NYC local poll window:
@@ -651,8 +663,8 @@ def fetch_alerts() -> tuple[list[dict], list[dict], list[dict]]:
             # ── Active periods ────────────────────────────────────────────────
             is_active = False
             for seq, ap in enumerate(raw.get('active_period', [])):
-                start = ap.get('start', 0)
-                end   = ap.get('end')              # None = open-ended / ongoing
+                start = _ts_to_sec(ap.get('start', 0))
+                end   = _ts_to_sec(ap.get('end'))         # None = open-ended / ongoing
                 periods.append({
                     'alert_id':   alert_id,
                     'period_seq': seq,
